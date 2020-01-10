@@ -15,20 +15,26 @@
 
 # Please submit bugfixes or comments via http://bugs.opensuse.org/
 #
-%global commit 1ee3503cbc52b73876b6aae5471d3b6f7c092bf5
+%global commit c511b0692784a7085df4b1ae35748fb318fa79ee
 %global shortcommit %(c=%{commit}; echo ${c:0:7})
-%global github_owner beekhof
-%global buildnum 9
+%global github_owner Clusterlabs
+%global buildnum 31
 
 Name:           sbd
 Summary:        Storage-based death
+%if %{defined _unitdir}
 License:        GPLv2+
+%else
+# initscript is Revised BSD
+License:        GPLv2+ and BSD
+%endif
 Group:          System Environment/Daemons
 Version:        1.2.1
 #Release:        0.%{buildnum}.%{shortcommit}.git%{?dist}
 Release:        %{buildnum}%{?dist}
 Url:            https://github.com/%{github_owner}/%{name}
 Source0:        https://github.com/%{github_owner}/%{name}/archive/%{commit}/%{name}-%{commit}.tar.gz
+Source1:        sbd.8.pod
 BuildRoot:      %{_tmppath}/%{name}-%{version}-build
 BuildRequires:  autoconf
 BuildRequires:  automake
@@ -43,11 +49,8 @@ BuildRequires:  libxml2-devel
 BuildRequires:  pkgconfig
 BuildRequires:  python-devel
 Patch1:         sbd-no-storage-option.patch
-Patch2:         sbd-local-debug.patch
-Patch3:         sbd-pcmk-health.patch
-Patch4:         sbd-proc-pid.patch
-Patch5:         sbd-timeout-in-seconds.patch
-Patch6:         sbd-init.patch
+Patch6:         0001-Add-LSB-init.patch
+Patch7:         0002-build-steal-CONFIGDIR-INITDIR-from-pacemaker.patch
 
 %if 0%{?rhel} > 0
 ExclusiveArch: i686 x86_64
@@ -65,13 +68,11 @@ Currently it is limited to watchdog integration.
 ###########################################################
 
 %prep
-%setup -n %{name}-%{commit} 
+%setup -n %{name}-%{commit}
+cp %SOURCE1 man
 %patch1 -p1
-%patch2 -p1
-%patch3 -p1
-%patch4 -p1
-%patch5 -p1
-%patch6 -p0
+%patch6 -p1
+%patch7 -p1
 
 ###########################################################
 
@@ -87,12 +88,13 @@ make %{?_smp_mflags}
 
 make DESTDIR=$RPM_BUILD_ROOT LIBDIR=%{_libdir} install
 rm -rf ${RPM_BUILD_ROOT}%{_libdir}/stonith
-rm -rf ${RPM_BUILD_ROOT}%{_mandir}/man8/sbd*
 
 %if %{defined _unitdir}
 install -D -m 0644 src/sbd.service $RPM_BUILD_ROOT/%{_unitdir}/sbd.service
+install -D -m 0644 src/sbd_remote.service $RPM_BUILD_ROOT/%{_unitdir}/sbd_remote.service
 %else
 install -D -m 0755 src/sbd_helper $RPM_BUILD_ROOT/%{_initddir}/sbd_helper
+install -D -m 0755 src/sbd_remote_helper $RPM_BUILD_ROOT/%{_initrddir}/sbd_remote_helper
 %endif
 
 mkdir -p ${RPM_BUILD_ROOT}%{_sysconfdir}/sysconfig
@@ -106,21 +108,27 @@ rm -rf %{buildroot}
 %if %{defined _unitdir}
 %post
 %systemd_post sbd.service
+%systemd_post sbd_remote.service
 
 %preun
 %systemd_preun sbd.service
+%systemd_preun sbd_remote.service
 
 %postun
 %systemd_postun sbd.service
+%systemd_postun sbd_remote.service
 %else
 %post
 /sbin/chkconfig --add sbd_helper || :
+/sbin/chkconfig --add sbd_remote_helper || :
 
 %preun
 /sbin/service sbd_helper stop  &>/dev/null || :
+/sbin/service sbd_remote_helper stop  &>/dev/null || :
 if [ $1 -eq 0 ]; then
     # Package removal, not upgrade
     /sbin/chkconfig --del sbd_helper || :
+    /sbin/chkconfig --del sbd_remote_helper || :
 fi
 %endif
 
@@ -129,16 +137,30 @@ fi
 %defattr(-,root,root)
 %config(noreplace) %{_sysconfdir}/sysconfig/sbd
 %{_sbindir}/sbd
-#doc %{_mandir}/man8/sbd*
+#%{_datadir}/sbd
+%doc %{_mandir}/man8/sbd*
 %if %{defined _unitdir}
 %{_unitdir}/sbd.service
+%{_unitdir}/sbd_remote.service
 %else
 %{_initddir}/sbd_helper
+%{_initrddir}/sbd_remote_helper
 %endif
 %doc COPYING
 
 %changelog
-* Mon Apr 4 2016 <kwenning@redhat.com> - 1.2.1-9
+* Mon Nov 7 2016 <kwenning@redhat.com> - 1.2.1-31
+- init-patch updated
+- added CONFDIR & INITDIR for distro indep init
+- added stripped down manpage
+  Resolves: rhbz#1375244
+
+* Tue Oct 11 2016 <kwenning@redhat.com> - 1.2.1-30
+- init-patch updated
+- Rebuild against RHEL-6.9
+  Resolves: rhbz#1375244
+
+-* Mon Apr 4 2016 <kwenning@redhat.com> - 1.2.1-9
 - use SBD_OPTS when calling sbd
   Resolves: rhbz#1313246
  

@@ -78,8 +78,16 @@ DISK=0
 if test "x${enable_shared_disk}" != xno ; then
    DISK=1
 fi
+
 AC_DEFINE_UNQUOTED(SUPPORT_SHARED_DISK, $DISK, Turn on functionality that requires shared disk)
 AM_CONDITIONAL(SUPPORT_SHARED_DISK, test "$DISK" = "1")
+
+if
+	test -e /proc/$$
+then
+	echo "/proc/{pid} is supported" 
+	AC_DEFINE_UNQUOTED(HAVE_PROC_PID, 1, Define to 1 if /proc/{pid} is supported.)
+fi
 
 dnl **********************************************************************
 dnl Check for various argv[] replacing functions on various OSs
@@ -195,7 +203,7 @@ eval infodir="`eval echo ${infodir}`"
 eval mandir="`eval echo ${mandir}`"
 
 dnl The Makefiles and shell scripts we output
-AC_CONFIG_FILES([Makefile src/Makefile agent/Makefile man/Makefile src/sbd.service])
+AC_CONFIG_FILES([Makefile src/Makefile agent/Makefile man/Makefile src/sbd.service src/sbd_remote.service])
 
 dnl Now process the entire list of files added by previous 
 dnl  calls to AC_CONFIG_FILES()

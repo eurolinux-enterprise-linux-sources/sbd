@@ -1,0 +1,500 @@
+From d17d20349a72afc22296fea7f28ce9d973d8b7ef Mon Sep 17 00:00:00 2001
+From: Klaus Wenninger <klaus.wenninger@aon.at>
+Date: Tue, 26 Jul 2016 13:54:57 +0200
+Subject: [PATCH] Add LSB init
+
+---
+ configure.ac             |   2 +-
+ sbd.spec                 |  25 +++++++
+ src/sbd-cluster.c        |  28 ++++----
+ src/sbd_helper.in        | 175 +++++++++++++++++++++++++++++++++++++++++++++++
+ src/sbd_remote_helper.in | 173 ++++++++++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 388 insertions(+), 15 deletions(-)
+ create mode 100644 src/sbd_helper.in
+ create mode 100644 src/sbd_remote_helper.in
+
+diff --git a/configure.ac b/configure.ac
+index 048af5a..e9127ba 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -203,7 +203,7 @@ eval infodir="`eval echo ${infodir}`"
+ eval mandir="`eval echo ${mandir}`"
+ 
+ dnl The Makefiles and shell scripts we output
+-AC_CONFIG_FILES([Makefile src/Makefile agent/Makefile man/Makefile src/sbd.service src/sbd_remote.service])
++AC_CONFIG_FILES([Makefile src/Makefile agent/Makefile man/Makefile src/sbd.service src/sbd_remote.service src/sbd_helper src/sbd_remote_helper])
+ 
+ dnl Now process the entire list of files added by previous 
+ dnl  calls to AC_CONFIG_FILES()
+diff --git a/sbd.spec b/sbd.spec
+index 33334b2..5570d9b 100644
+--- a/sbd.spec
++++ b/sbd.spec
+@@ -22,7 +22,12 @@
+ 
+ Name:           sbd
+ Summary:        Storage-based death
++%if %{defined _unitdir}
+ License:        GPLv2+
++%else
++# initscript is Revised BSD
++License:        GPLv2+ and BSD
++%endif
+ Group:          System Environment/Daemons
+ Version:        1.2.1
+ Release:        0.%{buildnum}.%{shortcommit}.git%{?dist}
+@@ -77,6 +82,9 @@ install -D -m 0755 src/sbd.sh $RPM_BUILD_ROOT/usr/share/sbd/sbd.sh
+ %if %{defined _unitdir}
+ install -D -m 0644 src/sbd.service $RPM_BUILD_ROOT/%{_unitdir}/sbd.service
+ install -D -m 0644 src/sbd_remote.service $RPM_BUILD_ROOT/%{_unitdir}/sbd_remote.service
++%else
++install -D -m 0755 src/sbd_helper $RPM_BUILD_ROOT/%{_initrddir}/sbd_helper
++install -D -m 0755 src/sbd_remote_helper $RPM_BUILD_ROOT/%{_initrddir}/sbd_remote_helper
+ %endif
+ 
+ mkdir -p ${RPM_BUILD_ROOT}%{_sysconfdir}/sysconfig
+@@ -97,6 +105,20 @@ rm -rf %{buildroot}
+ %postun
+ %systemd_postun sbd.service
+ %systemd_postun sbd_remote.service
++
++%else
++
++%post
++/sbin/chkconfig --add sbd_helper || :
++
++%preun
++/sbin/service sbd_helper stop  &>/dev/null || :
++/sbin/service sbd_remote_helper stop  &>/dev/null || :
++if [ $1 -eq 0 ]; then
++    # Package removal, not upgrade
++    /sbin/chkconfig --del sbd_helper || :
++    /sbin/chkconfig --del sbd_remote_helper || :
++fi
+ %endif
+ 
+ %files
+@@ -109,6 +131,9 @@ rm -rf %{buildroot}
+ %if %{defined _unitdir}
+ %{_unitdir}/sbd.service
+ %{_unitdir}/sbd_remote.service
++%else
++%{_initrddir}/sbd_helper
++%{_initrddir}/sbd_remote_helper
+ %endif
+ %doc COPYING
+ 
+diff --git a/src/sbd-cluster.c b/src/sbd-cluster.c
+index 67e930b..b58d691 100644
+--- a/src/sbd-cluster.c
++++ b/src/sbd-cluster.c
+@@ -190,9 +190,8 @@ int
+ sbd_procfs_process_info(struct dirent *entry, char *name, int *pid)
+ {
+     int fd, local_pid;
+-    FILE *file;
+     struct stat statbuf;
+-    char key[16] = { 0 }, procpath[128] = { 0 };
++    char procpath[128] = { 0 };
+ 
+     /* We're only interested in entries whose name is a PID,
+      * so skip anything non-numeric or that is too long.
+@@ -225,22 +224,23 @@ sbd_procfs_process_info(struct dirent *entry, char *name, int *pid)
+         return -1;
+     }
+ 
+-    /* Read the first entry ("Name:") from the process's status file.
+-     * We could handle the valgrind case if we parsed the cmdline file
+-     * instead, but that's more of a pain than it's worth.
++    /* we're hunting for a binary file so evaluate exe-link
++     * to filter out start-scripts, wrappers, valgrind and alike.
++     * truncate to 16 chars incl termination as "Name:" in status
++     * would be
+      */
++
+     if (name != NULL) {
+-        strcat(procpath, "/status");
+-        file = fopen(procpath, "r");
+-        if (!file) {
+-            return -1;
+-        }
+-        if ((fscanf(file, "%15s%63s", key, name) != 2)
+-            || safe_str_neq(key, "Name:")) {
+-            fclose(file);
++        ssize_t exe_len = 0;
++        char exepath[128] = { 0 };
++
++        strcat(procpath, "/exe");
++        exe_len = readlink(procpath, exepath, sizeof(exepath));
++        if (exe_len == -1) {
+             return -1;
+         }
+-        fclose(file);
++        strncpy(name, basename(exepath),16);
++        name[15] = '\0';
+     }
+ 
+     return 0;
+diff --git a/src/sbd_helper.in b/src/sbd_helper.in
+new file mode 100644
+index 0000000..44dd1b5
+--- /dev/null
++++ b/src/sbd_helper.in
+@@ -0,0 +1,175 @@
++#!/bin/bash
++
++# Authors:
++#  Klaus Wenninger <kwenning@redhat.com>
++#
++# License: Revised BSD
++
++# chkconfig: - 99 01
++# description: Shared-storage based fencing daemon
++# processname: sbd
++#
++### BEGIN INIT INFO
++# Provides:		sbd_helper
++# Required-Start:	$local_fs $remote_fs
++# Should-Start:		$syslog iscsi open-iscsi
++# Should-Stop:		$syslog iscsi open-iscsi
++# X-Start-Before: 	corosync
++# X-Stop-After: 	corosync
++# Required-Stop:	$local_fs $remote_fs
++# Default-Start:
++# Default-Stop:
++# Short-Description:	Starts and stops Shared-storage based fencing daemon.
++# Description:		Starts and stops Shared-storage based fencing daemon.
++### END INIT INFO
++
++desc="Shared-storage based fencing daemon"
++prog="sbd"
++pidfile="@localstatedir@/run/${prog}.pid"
++
++# set secure PATH
++PATH="/sbin:/bin:/usr/sbin:/usr/bin:@sbindir@"
++
++checkrc() {
++	if [ $? = 0 ]; then
++		success
++	else
++		failure
++	fi
++}
++
++success()
++{
++	echo -ne "[  OK  ]\r"
++}
++
++failure()
++{
++	echo -ne "[FAILED]\r"
++}
++
++log()
++{
++	logger -t sbd -p daemon.notice "$*"
++}
++
++notify()
++{
++	log "$*"
++	echo -n "   $*"
++}
++
++sbd_status()
++{
++	pid=$(cat "$pidfile" 2>/dev/null)
++	status_rtrn=$?
++	if [ $status_rtrn -eq 0 ]; then
++		kill -0 $pid > /dev/null 2>&1
++		status_rtrn=$?
++	fi
++	if [ $status_rtrn -ne 0 ]; then
++		if [ -f "$pidfile" ]; then
++			status_rtrn=1
++		else
++			status_rtrn=3
++		fi
++		rm -f "$pidfile"
++		echo "$prog is stopped"
++	else
++		echo "$prog (pid $pid) is running..."
++	fi
++	return $status_rtrn
++}
++
++if [ -d @CONFIGDIR@ ]; then
++	[ -f @INITDIR@/functions ] && . @INITDIR@/functions
++set -a
++	[ -f @CONFIGDIR@/sbd ] && . @CONFIGDIR@/sbd
++set +a
++fi
++
++LOCK_DIR="."
++if [ -d "@localstatedir@/lock/subsys" ]; then
++	LOCK_DIR="@localstatedir@/lock/subsys"
++elif [ -d "@localstatedir@/lock" ]; then
++	LOCK_DIR="@localstatedir@/lock"
++fi
++[ -z "$LOCK_FILE" ] && LOCK_FILE="$LOCK_DIR/sbd"
++
++start()
++{
++	notify "Starting $desc"
++
++	if sbd_status > /dev/null 2>&1; then
++		success
++	else
++		$prog $SBD_OPTS -p "$pidfile" watch > /dev/null 2>&1
++
++		# give it a little time to fail after daemonization
++		sleep 2
++
++		if sbd_status > /dev/null 2>&1; then
++			touch "$LOCK_FILE"
++			success
++		else
++			failure
++			rtrn=1
++		fi
++	fi
++	echo
++}
++
++stop()
++{
++	if sbd_status > /dev/null 2>&1; then
++	    notify "Signaling $desc to terminate"
++	    kill -TERM $(cat "$pidfile") > /dev/null 2>&1
++	    checkrc
++	    echo
++
++	    notify "Waiting for sbd to unload"
++	    while sbd_status > /dev/null 2>&1; do
++		sleep 1
++		echo -n "."
++	    done
++	else
++	    echo -n "$desc is already stopped"
++	fi
++
++	rm -f "$LOCK_FILE"
++	rm -f "$pidfile"
++	killall -q -9 sbd
++	success
++	echo
++}
++
++rtrn=0
++
++case "$1" in
++start)
++	start
++;;
++restart|reload|force-reload)
++	stop
++	start
++;;
++condrestart|try-restart)
++	if sbd_status > /dev/null 2>&1; then
++	    stop
++	    start
++	fi
++;;
++status)
++	sbd_status
++	rtrn=$?
++;;
++stop)
++	stop
++;;
++*)
++	echo "usage: $0 {start|stop|restart|reload|force-reload|condrestart|try-restart|status}"
++	rtrn=2
++;;
++esac
++
++exit $rtrn
+diff --git a/src/sbd_remote_helper.in b/src/sbd_remote_helper.in
+new file mode 100644
+index 0000000..6d91ac4
+--- /dev/null
++++ b/src/sbd_remote_helper.in
+@@ -0,0 +1,173 @@
++#!/bin/bash
++
++# Authors:
++#  Klaus Wenninger <kwenning@redhat.com>
++#
++# License: Revised BSD
++
++# chkconfig: - 99 01
++# description: Shared-storage based fencing daemon
++# processname: sbd
++#
++### BEGIN INIT INFO
++# Provides:		sbd_remote_helper
++# Required-Start:	$local_fs $remote_fs
++# Should-Start:		$syslog iscsi open-iscsi
++# Should-Stop:		$syslog iscsi open-iscsi
++# Required-Stop:	$local_fs $remote_fs
++# Default-Start:
++# Default-Stop:
++# Short-Description:	Starts and stops Shared-storage based fencing daemon.
++# Description:		Starts and stops Shared-storage based fencing daemon.
++### END INIT INFO
++
++desc="Shared-storage based fencing daemon"
++prog="sbd"
++pidfile="@localstatedir@/run/${prog}.pid"
++
++# set secure PATH
++PATH="/sbin:/bin:/usr/sbin:/usr/bin:@sbindir@"
++
++checkrc() {
++	if [ $? = 0 ]; then
++		success
++	else
++		failure
++	fi
++}
++
++success()
++{
++	echo -ne "[  OK  ]\r"
++}
++
++failure()
++{
++	echo -ne "[FAILED]\r"
++}
++
++log()
++{
++	logger -t sbd -p daemon.notice "$*"
++}
++
++notify()
++{
++	log "$*"
++	echo -n "   $*"
++}
++
++sbd_status()
++{
++	pid=$(cat "$pidfile" 2>/dev/null)
++	status_rtrn=$?
++	if [ $status_rtrn -eq 0 ]; then
++		kill -0 $pid > /dev/null 2>&1
++		status_rtrn=$?
++	fi
++	if [ $status_rtrn -ne 0 ]; then
++		if [ -f "$pidfile" ]; then
++			status_rtrn=1
++		else
++			status_rtrn=3
++		fi
++		rm -f "$pidfile"
++		echo "$prog is stopped"
++	else
++		echo "$prog (pid $pid) is running..."
++	fi
++	return $status_rtrn
++}
++
++if [ -d @CONFIGDIR@ ]; then
++	[ -f @INITDIR@/functions ] && . @INITDIR@/functions
++set -a
++	[ -f @CONFIGDIR@/sbd ] && . @CONFIGDIR@/sbd
++set +a
++fi
++
++LOCK_DIR="."
++if [ -d "@localstatedir@/lock/subsys" ]; then
++	LOCK_DIR="@localstatedir@/lock/subsys"
++elif [ -d "@localstatedir@/lock" ]; then
++	LOCK_DIR="@localstatedir@/lock"
++fi
++[ -z "$LOCK_FILE" ] && LOCK_FILE="$LOCK_DIR/sbd"
++
++start()
++{
++	notify "Starting $desc"
++
++	if sbd_status > /dev/null 2>&1; then
++		success
++	else
++		$prog $SBD_OPTS -p "$pidfile" watch > /dev/null 2>&1
++
++		# give it a little time to fail after daemonization
++		sleep 2
++
++		if sbd_status > /dev/null 2>&1; then
++			touch "$LOCK_FILE"
++			success
++		else
++			failure
++			rtrn=1
++		fi
++	fi
++	echo
++}
++
++stop()
++{
++	if sbd_status > /dev/null 2>&1; then
++	    notify "Signaling $desc to terminate"
++	    kill -TERM $(cat "$pidfile") > /dev/null 2>&1
++	    checkrc
++	    echo
++
++	    notify "Waiting for sbd to unload"
++	    while sbd_status > /dev/null 2>&1; do
++		sleep 1
++		echo -n "."
++	    done
++	else
++	    echo -n "$desc is already stopped"
++	fi
++
++	rm -f "$LOCK_FILE"
++	rm -f "$pidfile"
++	killall -q -9 sbd
++	success
++	echo
++}
++
++rtrn=0
++
++case "$1" in
++start)
++	start
++;;
++restart|reload|force-reload)
++	stop
++	start
++;;
++condrestart|try-restart)
++	if sbd_status > /dev/null 2>&1; then
++	    stop
++	    start
++	fi
++;;
++status)
++	sbd_status
++	rtrn=$?
++;;
++stop)
++	stop
++;;
++*)
++	echo "usage: $0 {start|stop|restart|reload|force-reload|condrestart|try-restart|status}"
++	rtrn=2
++;;
++esac
++
++exit $rtrn
+-- 
+1.8.3.1
+

@@ -1,0 +1,199 @@
+=head1 NAME
+
+sbd - STONITH Block Device daemon
+
+=head1 SYNPOSIS
+
+sbd [options] C<command>
+
+=head1 SUMMARY
+
+The SBD (Storage-Based Death) daemon integrates with Pacemaker and
+a watchdog device to arrange for nodes to reliably self-terminate when
+fencing is required. SBD can be particularly useful in environments
+where traditional fencing mechanisms are not possible.
+
+This build of SBD has message exchanging via a shared block storage
+disabled to solely serve the above purpose.
+
+=head2 GENERAL OPTIONS
+
+=over
+
+=item B<-v>
+
+Enable some verbose debug logging.
+
+=item B<-h>
+
+Display a concise summary of C<sbd> options.
+
+=item B<-n> I<node>
+
+Set local node name; defaults to C<uname -n>. This should not need to be
+set.
+
+=item B<-R>
+
+Do B<not> enable realtime priority. By default, C<sbd> runs at realtime
+priority, locks itself into memory, and also acquires highest IO
+priority to protect itself against interference from other processes on
+the system. This is a debugging-only option.
+
+=back
+
+=head2 watch
+
+Example usage:
+
+	sbd -W -P watch
+
+This command will make C<sbd> start in daemon mode. It will constantly monitor
+corosync/pacemaker_remoted and optionally take Pacemaker's state into account.
+
+C<sbd> B<must> be started on boot before the cluster stack! See below
+for enabling this according to your boot environment.
+
+The options for this mode are rarely specified directly on the
+commandline directly, but most frequently set via F</etc/sysconfig/sbd>.
+
+For this build withouth block device integration configuration of a watchdog
+is mandatory.
+The watchdog is activated at initial start of the sbd daemon.
+
+There is one C<sbd> process that acts as a master to which all watchers
+report; one for corosync/pacemaker_remote; and, optionally, one
+that handles the Pacemaker integration.
+
+=over
+
+=item B<-W>
+
+Enable or disable use of the system watchdog to protect against the sbd
+processes failing and the node being left in an undefined state. Specify
+this once to enable, twice to disable.
+
+Defaults to I<enabled>.
+
+=item B<-w> F</dev/watchdog>
+
+This can be used to override the default watchdog device used and should not
+usually be necessary.
+
+=item B<-p> F</var/run/sbd.pid>
+
+This option can be used to specify a pidfile for the main sbd process.
+
+=item B<-F> I<N>
+
+Number of failures before a failing servant process will not be restarted
+immediately until the dampening delay has expired. If set to zero, servants
+will be restarted immediately and indefinitely. If set to one, a failed
+servant will be restarted once every B<-t> seconds. If set to a different
+value, the servant will be restarted that many times within the dampening
+period and then delay.
+
+Defaults to I<1>.
+
+=item B<-t> I<N>
+
+Dampening delay before faulty servants are restarted. Combined with C<-F 1>,
+the most logical way to tune the restart frequency of servant processes.
+Default is 5 seconds.
+
+If set to zero, processes will be restarted indefinitely and immediately.
+
+=item B<-P>
+
+Check Pacemaker quorum and node health.
+
+=item B<-Z>
+
+Enable trace mode. B<Warning: this is unsafe for production, use at your
+own risk!> Specifying this once will turn all reboots or power-offs, be
+they caused by self-fence decisions or messages, into a crashdump.
+Specifying this twice will just log them but not continue running.
+
+=item B<-T>
+
+By default, the daemon will set the watchdog timeout as specified in the
+device metadata. However, this does not work for every watchdog device.
+In this case, you must manually ensure that the watchdog timeout used by
+the system correctly matches the SBD settings, and then specify this
+option to allow C<sbd> to continue with start-up.
+
+=back
+
+=head1 Base system configuration
+
+=head2 Configure a watchdog
+
+The only purpose of this build of sbd is to give pacemaker access
+to a hardware watchdog.
+Thus it is mandatory that you configure your Linux system to load a
+watchdog driver with hardware assistance (as is available on most modern
+systems), such as I<hpwdt>, I<iTCO_wdt>, or others. As a fall-back, you
+can use the I<softdog> module.
+
+No other software must access the watchdog timer; it can only be
+accessed by one process at any given time. Some hardware vendors ship
+systems management software that use the watchdog for system resets
+(f.e. HP ASR daemon). Such software has to be disabled if the watchdog
+is to be used by SBD.
+
+=head2 Configure SBD to start on boot
+
+On systems using C<sysvinit>, the C<openais> or C<corosync> system
+start-up scripts must handle starting or stopping C<sbd> as required
+before starting the rest of the cluster stack.
+
+For C<systemd>, sbd simply has to be enabled using
+
+	systemctl enable sbd.service
+
+The daemon is brought online on each node before corosync and Pacemaker
+are started, and terminated only after all other cluster components have
+been shut down - ensuring that cluster resources are never activated
+without SBD supervision.
+
+=head2 Configuration via sysconfig
+
+The system instance of C<sbd> is configured via F</etc/sysconfig/sbd>.
+In this file, you must specify the watchdog-device used, as well as any
+options to pass to the daemon:
+
+	SBD_WATCHDOG_DEV=/dev/watchdog
+	SBD_PACEMAKER="true"
+
+
+=head1 Pacemaker CIB integration
+
+=head2 General cluster properties
+
+You must also enable STONITH in general, and set the
+I<stonith-watchdog-timeout> to be at least twice the I<timeout> you have
+configured for the hardware watchdog.
+If that timeout is 5 seconds, this is a possible configuration:
+
+	property stonith-watchdog-timeout="10s"
+
+=head1 LICENSE
+
+Copyright (C) 2008-2013 Lars Marowsky-Bree
+
+Copyright (C) 2014-2016 Andrew Beekhof
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public
+License as published by the Free Software Foundation; either
+version 2 of the License, or (at your option) any later version.
+
+This software is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+General Public License for more details.
+
+For details see the GNU General Public License at
+http://www.gnu.org/licenses/gpl-2.0.html (version 2) and/or
+http://www.gnu.org/licenses/gpl.html (the newest as per "any later").
+

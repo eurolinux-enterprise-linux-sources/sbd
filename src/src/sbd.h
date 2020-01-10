@@ -4,16 +4,16 @@
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  * 
  * This software is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  * 
- * You should have received a copy of the GNU General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include <arpa/inet.h>
@@ -101,6 +101,17 @@ struct sbd_context {
 	struct iocb	io;
 };
 
+enum pcmk_health 
+{
+    pcmk_health_unknown,
+    pcmk_health_pending,
+    pcmk_health_transient,
+    pcmk_health_unclean,
+    pcmk_health_shutdown,
+    pcmk_health_online,
+    pcmk_health_noquorum,
+};
+
 void usage(void);
 int watchdog_init_interval(void);
 int watchdog_tickle(void);
@@ -115,6 +126,7 @@ pid_t make_daemon(void);
 void maximize_priority(void);
 void sbd_get_uname(void);
 void sbd_set_format_string(int method, const char *daemon);
+void notify_parent(void);
 
 /* Tunable defaults: */
 extern unsigned long    timeout_watchdog;
@@ -155,6 +167,7 @@ int servant(const char *diskname, int mode, const void* argp);
 #endif
 
 int servant_pcmk(const char *diskname, int mode, const void* argp);
+int servant_cluster(const char *diskname, int mode, const void* argp);
 
 struct servants_list_item *lookup_servant_by_dev(const char *devname);
 struct servants_list_item *lookup_servant_by_pid(pid_t pid);
@@ -172,3 +185,8 @@ void set_proc_title(const char *fmt,...);
 #define DBGLOG(lvl, fmt, args...) do {           \
 	if (debug > 0) cl_log(lvl, fmt, ##args); \
 	} while(0)
+
+extern int servant_health;
+void set_servant_health(enum pcmk_health state, int level, char const *format, ...) __attribute__ ((__format__ (__printf__, 3, 4)));
+
+bool sbd_is_disk(struct servants_list_item *servant);

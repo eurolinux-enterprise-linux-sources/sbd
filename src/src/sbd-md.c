@@ -4,16 +4,16 @@
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This software is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "sbd.h"
@@ -28,7 +28,7 @@
 #define SLOT_TO_SECTOR(slot) (1+slot*2)
 #define MBOX_TO_SECTOR(mbox) (2+mbox*2)
 
-extern int servant_count;
+extern int disk_count;
 static int servant_inform_parent = 0;
 
 /* These have to match the values in the header of the partition */
@@ -820,10 +820,12 @@ int ping_via_slots(const char *name, struct servants_list_item *servants)
 	sigprocmask(SIG_BLOCK, &procmask, NULL);
 
 	for (s = servants; s; s = s->next) {
-            s->pid = assign_servant(s->devname, &slot_ping_wrapper, 0, (const void*)name);
-	}
+            if(sbd_is_disk(s)) {
+                s->pid = assign_servant(s->devname, &slot_ping_wrapper, 0, (const void*)name);
+            }
+        }
 
-	while (servants_finished < servant_count) {
+	while (servants_finished < disk_count) {
 		sig = sigwaitinfo(&procmask, &sinfo);
 		if (sig == SIGCHLD) {
 			while ((pid = wait(&status))) {
@@ -831,7 +833,7 @@ int ping_via_slots(const char *name, struct servants_list_item *servants)
 					break;
 				} else {
 					s = lookup_servant_by_pid(pid);
-					if (s) {
+					if (s && sbd_is_disk(s)) {
 						servants_finished++;
 					}
 				}
@@ -843,7 +845,7 @@ int ping_via_slots(const char *name, struct servants_list_item *servants)
 
 int quorum_write(int good_servants)
 {
-	return (good_servants > servant_count/2);
+	return (good_servants > disk_count/2);
 }
 
 int messenger(const char *name, const char *msg, struct servants_list_item *servants)
@@ -867,7 +869,7 @@ int messenger(const char *name, const char *msg, struct servants_list_item *serv
 	}
 	
 	while (!(quorum_write(successful_delivery) || 
-		(servants_finished == servant_count))) {
+		(servants_finished == disk_count))) {
 		sig = sigwaitinfo(&procmask, &sinfo);
 		if (sig == SIGCHLD) {
 			while ((pid = waitpid(-1, &status, WNOHANG))) {

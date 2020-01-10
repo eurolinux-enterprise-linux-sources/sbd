@@ -4,16 +4,16 @@
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public
  * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * version 2 of the License, or (at your option) any later version.
  *
  * This software is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "sbd.h"
@@ -51,6 +51,7 @@ char *	local_uname;
 /* Global, non-tunable variables: */
 int	sector_size		= 0;
 int	watchdogfd 		= -1;
+int     servant_health          = 0;
 
 /*const char	*devname;*/
 const char	*cmdname;
@@ -627,5 +628,69 @@ sbd_set_format_string(int method, const char *daemon)
 
     if(offset > 0) {
         qb_log_format_set(method, fmt);
+    }
+}
+
+void
+notify_parent(void)
+{
+    pid_t		ppid;
+    union sigval	signal_value;
+
+    memset(&signal_value, 0, sizeof(signal_value));
+    ppid = getppid();
+
+    if (ppid == 1) {
+        /* Our parent died unexpectedly. Triggering
+         * self-fence. */
+        cl_log(LOG_WARNING, "Our parent is dead.");
+        do_reset();
+    }
+
+    switch (servant_health) {
+        case pcmk_health_pending:
+        case pcmk_health_shutdown:
+        case pcmk_health_transient:
+            DBGLOG(LOG_INFO, "Not notifying parent: state transient (%d)", servant_health);
+            break;
+
+        case pcmk_health_unknown:
+        case pcmk_health_unclean:
+        case pcmk_health_noquorum:
+            DBGLOG(LOG_WARNING, "Notifying parent: UNHEALTHY (%d)", servant_health);
+            sigqueue(ppid, SIG_PCMK_UNHEALTHY, signal_value);
+            break;
+
+        case pcmk_health_online:
+            DBGLOG(LOG_INFO, "Notifying parent: healthy");
+            sigqueue(ppid, SIG_LIVENESS, signal_value);
+            break;
+
+        default:
+            DBGLOG(LOG_WARNING, "Notifying parent: UNHEALTHY %d", servant_health);
+            sigqueue(ppid, SIG_PCMK_UNHEALTHY, signal_value);
+            break;
+    }
+}
+
+void
+set_servant_health(enum pcmk_health state, int level, char const *format, ...)
+{
+    if (servant_health != state) {
+        va_list ap;
+        int len = 0;
+        char *string = NULL;
+
+        servant_health = state;
+
+        va_start(ap, format);
+        len = vasprintf (&string, format, ap);
+
+        if(len > 0) {
+            cl_log(level, string);
+        }
+        
+        va_end(ap);
+        free(string);
     }
 }

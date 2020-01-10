@@ -1,17 +1,16 @@
 [Unit]
-Description=Shared-storage based fencing daemon
-Before=pacemaker.service
+Description=Shared-storage based fencing daemon on pacemaker remote node
 After=systemd-modules-load.service iscsi.service
-PartOf=corosync.service
+PartOf=pacemaker_remote.service
 RefuseManualStop=true
 RefuseManualStart=true
 
 [Service]
 Type=forking
-PIDFile=@localstatedir@/run/sbd.pid
-EnvironmentFile=-@sysconfdir@/sysconfig/sbd
-ExecStart=@sbindir@/sbd $SBD_OPTS -p @localstatedir@/run/sbd.pid watch 
-ExecStop=@bindir@/kill -TERM $MAINPID
+PIDFile=/var/run/sbd.pid
+EnvironmentFile=-/etc/sysconfig/sbd
+ExecStart=/usr/sbin/sbd $SBD_OPTS -p /var/run/sbd.pid watch
+ExecStop=/usr/bin/kill -TERM $MAINPID
 
 # Could this benefit from exit codes for restart?
 # Does this need to be set to msgwait * 1.2?
@@ -21,5 +20,5 @@ ExecStop=@bindir@/kill -TERM $MAINPID
 Restart=on-abort
 
 [Install]
-RequiredBy=corosync.service
+RequiredBy=pacemaker_remote.service
 
