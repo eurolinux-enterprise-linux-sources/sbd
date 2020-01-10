@@ -1,0 +1,17 @@
+diff --git a/src/sbd.sysconfig b/src/sbd.sysconfig
+index 9ac2d15..f5b0b8c 100644
+--- a/src/sbd.sysconfig
++++ b/src/sbd.sysconfig
+@@ -1,12 +1,3 @@
+-## Type: string
+-## Default: ""
+-#
+-# SBD_DEVICE specifies the devices to use for exchanging sbd messages
+-# and to monitor. If specifying more than one path, use ";" as
+-# separator.
+-#
+-#SBD_DEVICE=""
+-
+ ## Type: yesno
+ ## Default: yes
+ #

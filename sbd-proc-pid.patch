@@ -1,0 +1,28 @@
+commit d172f2bb9e6e530039df3a001b9ce3eb76dc4a75
+Author: Andrew Beekhof <andrew@beekhof.net>
+Date:   Mon Oct 27 10:28:51 2014 +1100
+
+    Correctly enable /proc/pid validation in sbd_lock_running()
+
+diff --git a/configure.ac b/configure.ac
+index ec7fced..540fd57 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -78,9 +78,17 @@ DISK=0
+ if test "x${enable_shared_disk}" != xno ; then
+    DISK=1
+ fi
++
+ AC_DEFINE_UNQUOTED(SUPPORT_SHARED_DISK, $DISK, Turn on functionality that requires shared disk)
+ AM_CONDITIONAL(SUPPORT_SHARED_DISK, test "$DISK" = "1")
+ 
++if
++	test -e /proc/$$
++then
++	echo "/proc/{pid} is supported" 
++	AC_DEFINE_UNQUOTED(HAVE_PROC_PID, 1, Define to 1 if /proc/{pid} is supported.)
++fi
++
+ dnl **********************************************************************
+ dnl Check for various argv[] replacing functions on various OSs
+ dnl
