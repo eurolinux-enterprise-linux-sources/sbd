@@ -31,6 +31,8 @@ int	servant_restart_interval = 5;
 int	servant_restart_count = 1;
 int	start_mode = 0;
 char*	pidfile = NULL;
+bool do_flush = true;
+char timeout_sysrq_char = 'b';
 
 int parse_device_line(const char *line);
 
@@ -64,7 +66,7 @@ void recruit_servant(const char *devname, pid_t pid)
 
 	servant_count++;
         if(sbd_is_disk(newbie)) {
-            cl_log(LOG_NOTICE, "Monitoring %s", devname);
+            cl_log(LOG_INFO, "Monitoring %s", devname);
             disk_count++;
         } else {
             newbie->outdated = 1;
@@ -565,7 +567,7 @@ void inquisitor_child(void)
                     if(cluster_alive(true)) {
                         /* We LIVE! */
                         if(cluster_appeared == false) {
-                            cl_log(LOG_NOTICE, "Active cluster detected");
+                            cl_log(LOG_INFO, "Active cluster detected");
                         }
                         tickle = 1;
                         can_detach = 1;
@@ -574,7 +576,7 @@ void inquisitor_child(void)
                     } else if(cluster_alive(false)) {
                         if(!decoupled) {
                             /* On the way up, detach and arm the watchdog */
-                            cl_log(LOG_NOTICE, "Partial cluster detected, detaching");
+                            cl_log(LOG_INFO, "Partial cluster detected, detaching");
                         }
 
                         can_detach = 1;
@@ -655,7 +657,7 @@ void inquisitor_child(void)
 				/* At level 2 or above, we do nothing, but expect
 				 * things to eventually return to
 				 * normal. */
-				do_reset();
+				do_timeout_action();
 			} else {
 				cl_log(LOG_ERR, "SBD: DEBUG MODE: Would have fenced due to timeout!");
 			}
@@ -668,7 +670,7 @@ void inquisitor_child(void)
 
                         if (debug_mode && watchdog_use) {
                             /* In debug mode, trigger a reset before the watchdog can panic the machine */
-                            do_reset();
+                            do_timeout_action();
                         }
 		}
 
@@ -803,6 +805,19 @@ parse_device_line(const char *line)
     return found;
 }
 
+#define SBD_SOURCE_FILES "sbd-cluster.c,sbd-common.c,sbd-inquisitor.c,sbd-md.c,sbd-pacemaker.c,setproctitle.c"
+
+static void
+sbd_log_filter_ctl(const char *files, uint8_t priority)
+{
+	if (files == NULL) {
+		files = SBD_SOURCE_FILES;
+	}
+
+	qb_log_filter_ctl(QB_LOG_SYSLOG, QB_LOG_FILTER_ADD, QB_LOG_FILTER_FILE, files, priority);
+	qb_log_filter_ctl(QB_LOG_STDERR, QB_LOG_FILTER_ADD, QB_LOG_FILTER_FILE, files, priority);
+}
+
 int
 arg_enabled(int arg_count)
 {
@@ -818,7 +833,9 @@ int main(int argc, char **argv, char **envp)
 	int P_count = 0;
         int qb_facility;
         const char *value = NULL;
-        int start_delay = 0;
+        bool delay_start = false;
+        long delay = 0;
+        char *timeout_action = NULL;
 
 	if ((cmdname = strrchr(argv[0], '/')) == NULL) {
 		cmdname = argv[0];
@@ -834,6 +851,7 @@ int main(int argc, char **argv, char **envp)
 
         qb_log_ctl(QB_LOG_SYSLOG, QB_LOG_CONF_ENABLED, QB_TRUE);
         qb_log_ctl(QB_LOG_STDERR, QB_LOG_CONF_ENABLED, QB_FALSE);
+        sbd_log_filter_ctl(NULL, LOG_NOTICE);
 
 	sbd_get_uname();
 
@@ -899,11 +917,26 @@ int main(int argc, char **argv, char **envp)
 
         value = getenv("SBD_DELAY_START");
         if(value) {
-            start_delay = crm_is_true(value);
-        }
-        cl_log(LOG_DEBUG, "Start delay: %d (%s)", (int)start_delay, value?value:"default");
+            delay_start = crm_is_true(value);
 
-	while ((c = getopt(argc, argv, "czC:DPRTWZhvw:d:n:p:1:2:3:4:5:t:I:F:S:s:")) != -1) {
+            if (!delay_start) {
+                delay = crm_get_msec(value) / 1000;
+                if (delay > 0) {
+                    delay_start = true;
+                }
+            }
+        }
+        cl_log(LOG_DEBUG, "Delay start: %s%s%s",
+               delay_start? "yes (" : "no",
+               delay_start? (delay > 0 ? value: "msgwait") : "",
+               delay_start? ")" : "");
+
+        value = getenv("SBD_TIMEOUT_ACTION");
+        if(value) {
+            timeout_action = strdup(value);
+        }
+
+	while ((c = getopt(argc, argv, "czC:DPRTWZhvw:d:n:p:1:2:3:4:5:t:I:F:S:s:r:")) != -1) {
 		switch (c) {
 		case 'D':
 			break;
@@ -926,15 +959,17 @@ int main(int argc, char **argv, char **envp)
 		case 'v':
                     debug++;
                     if(debug == 1) {
-                        qb_log_filter_ctl(QB_LOG_SYSLOG, QB_LOG_FILTER_ADD, QB_LOG_FILTER_FILE, "sbd-common.c,sbd-inquisitor.c,sbd-md.c,sbd-pacemaker.c", LOG_DEBUG);
-                        qb_log_filter_ctl(QB_LOG_STDERR, QB_LOG_FILTER_ADD, QB_LOG_FILTER_FILE, "sbd-common.c,sbd-inquisitor.c,sbd-md.c,sbd-pacemaker.c", LOG_DEBUG);
-			cl_log(LOG_INFO, "Verbose mode enabled.");
+                        sbd_log_filter_ctl(NULL, LOG_INFO);
+                        cl_log(LOG_INFO, "Verbose mode enabled.");
 
                     } else if(debug == 2) {
+                        sbd_log_filter_ctl(NULL, LOG_DEBUG);
+                        cl_log(LOG_INFO, "Debug mode enabled.");
+
+                    } else if(debug == 3) {
                         /* Go nuts, turn on pacemaker's logging too */
-                        qb_log_filter_ctl(QB_LOG_SYSLOG, QB_LOG_FILTER_ADD, QB_LOG_FILTER_FILE, "*", LOG_DEBUG);
-                        qb_log_filter_ctl(QB_LOG_STDERR, QB_LOG_FILTER_ADD, QB_LOG_FILTER_FILE, "*", LOG_DEBUG);
-			cl_log(LOG_INFO, "Verbose library mode enabled.");
+                        sbd_log_filter_ctl("*", LOG_DEBUG);
+                        cl_log(LOG_INFO, "Debug library mode enabled.");
                     }
                     break;
 		case 'T':
@@ -1016,6 +1051,12 @@ int main(int argc, char **argv, char **envp)
 			cl_log(LOG_INFO, "Servant restart count set to %d",
 					(int)servant_restart_count);
 			break;
+		case 'r':
+			if (timeout_action) {
+				free(timeout_action);
+			}
+			timeout_action = strdup(optarg);
+			break;
 		case 'h':
 			usage();
 			return (0);
@@ -1074,6 +1115,39 @@ int main(int argc, char **argv, char **envp)
 		goto out;
 	}
 
+	if (timeout_action) {
+		char *p[2];
+		int i;
+		char c;
+		int nrflags = sscanf(timeout_action, "%m[a-z],%m[a-z]%c", &p[0], &p[1], &c);
+		bool parse_error = (nrflags < 1) || (nrflags > 2);
+
+		for (i = 0; (i < nrflags) && (i < 2); i++) {
+			if (!strcmp(p[i], "reboot")) {
+				timeout_sysrq_char = 'b';
+			} else if (!strcmp(p[i], "crashdump")) {
+				timeout_sysrq_char = 'c';
+			} else if (!strcmp(p[i], "off")) {
+				timeout_sysrq_char = 'o';
+			} else if (!strcmp(p[i], "flush")) {
+				do_flush = true;
+			} else if (!strcmp(p[i], "noflush")) {
+				do_flush = false;
+			} else {
+				parse_error = true;
+			}
+			free(p[i]);
+		}
+		if (parse_error) {
+			fprintf(stderr, "Failed to parse timeout-action \"%s\".\n",
+				timeout_action);
+			exit_status = -1;
+			goto out;
+		}
+	}
+	cl_log(LOG_NOTICE, "%s flush + writing \'%c\' to sysrq on timeout",
+		do_flush?"Doing":"Skipping", timeout_sysrq_char);
+
 #if SUPPORT_SHARED_DISK
 	if (strcmp(argv[optind], "create") == 0) {
 		exit_status = init_devices(servants_leader);
@@ -1099,10 +1173,12 @@ int main(int argc, char **argv, char **envp)
                     open_any_device(servants_leader);
                 }
 
-                if(start_delay) {
-                    unsigned long delay = get_first_msgwait(servants_leader);
+                if (delay_start) {
+                    if (delay <= 0) {
+                        delay = get_first_msgwait(servants_leader);
+                    }
 
-                    sleep(delay);
+                    sleep((unsigned long) delay);
                 }
 
 	} else {

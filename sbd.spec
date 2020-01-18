@@ -15,26 +15,22 @@
 
 # Please submit bugfixes or comments via http://bugs.opensuse.org/
 #
-%global commit a74b4d25a3eb93fe1abbe6e3ebfd2b16cf48873f
+%global commit 7f33d1a409d0a4e2cd69946688c48eaa8f3c5d26
 %global shortcommit %(c=%{commit}; echo ${c:0:7})
 %global github_owner Clusterlabs
-%global buildnum 8.2
+%global buildnum 4
 
 Name:           sbd
 Summary:        Storage-based death
 License:        GPLv2+
 Group:          System Environment/Daemons
-Version:        1.3.1
-Release:        %{buildnum}%{?dist}.1
+Version:        1.4.0
+Release:        %{buildnum}%{?dist}
 Url:            https://github.com/%{github_owner}/%{name}
 Source0:        https://github.com/%{github_owner}/%{name}/archive/%{commit}/%{name}-%{commit}.tar.gz
-Patch0:         0001-make-pacemaker-dlm-wait-for-sbd-start.patch
-Patch1:         0002-mention-timeout-caveat-with-SBD_DELAY_START.patch
-Patch2:         0003-Doc-sbd.8.pod-add-query-test-watchdog.patch
-Patch11:        0012-Fix-sbd-common-don-t-follow-symlinks-outside-dev-for.patch
-Patch12:        0013-Refactor-sbd-common-separate-assignment-and-comparis.patch
-Patch13:        0014-Fix-sbd-common-avoid-statting-potential-links.patch
-Patch14:        0015-Feature-make-timeout-action-executed-by-sbd-configur.patch
+Patch0:         0001-Fix-sbd-cluster-finalize-cmap-connection-if-disconne.patch
+Patch1:         0002-Fix-sbd-pacemaker-make-handling-of-cib-connection-lo.patch
+Patch2:         0003-Fix-sbd-pacemaker-bail-out-of-status-earlier.patch
 BuildRoot:      %{_tmppath}/%{name}-%{version}-build
 BuildRequires:  autoconf
 BuildRequires:  automake
@@ -132,10 +128,27 @@ fi
 %doc COPYING
 
 %changelog
-* Thu Jan 8 2019 Klaus Wenninger <kwenning@redhat.com> - 1.3.1-8.2.1
-- make timeout-action configurable
+* Tue Mar 26 2019 Klaus Wenninger <kwenning@redhat.com> - 1.4.0-4
+- fix possible null-pointer-access just introduced
 
-  Resolves: rhbz#1666201
+  Resolves: rhbz#1691484
+
+* Tue Mar 26 2019 Klaus Wenninger <kwenning@redhat.com> - 1.4.0-3
+- finalize cmap connection if disconnected from cluster
+- make handling of cib-connection loss more robust
+
+  Resolves: rhbz#1691484
+
+* Thu Feb 7 2019 Klaus Wenninger <kwenning@redhat.com> - 1.4.0-2
+- rebuild against pacemaker 1.20 to make sbd actually use
+  the new libpengine API
+
+  Resolves: rhbz#1661233
+
+* Mon Jan 14 2019 Klaus Wenninger <kwenning@redhat.com> - 1.4.0-1
+- rebase to upstream v1.4.0
+
+  Resolves: rhbz#1660158
 
 * Wed Sep 19 2018 Klaus Wenninger <kwenning@redhat.com> - 1.3.1-8.2
 - avoid statting potential symlink-targets in /dev

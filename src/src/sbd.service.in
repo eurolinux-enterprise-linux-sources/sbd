@@ -1,6 +1,8 @@
 [Unit]
 Description=Shared-storage based fencing daemon
+Documentation=man:sbd(8)
 Before=pacemaker.service
+Before=dlm.service
 After=systemd-modules-load.service iscsi.service
 PartOf=corosync.service
 RefuseManualStop=true
@@ -22,4 +24,5 @@ Restart=on-abort
 
 [Install]
 RequiredBy=corosync.service
-
+RequiredBy=pacemaker.service
+RequiredBy=dlm.service

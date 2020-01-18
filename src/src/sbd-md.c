@@ -790,18 +790,22 @@ int list_slots(struct servants_list_item *servants)
 	struct sbd_context *st;
 
 	for (s = servants; s; s = s->next) {
+		int rv  = 0;
+
 		st = open_device(s->devname, LOG_WARNING);
 		if (!st) {
+			rc = -1;
 			fprintf(stdout, "== disk %s unreadable!\n", s->devname);
 			continue;
 		}
-		rc = slot_list(st);
+		rv = slot_list(st);
 		close_device(st);
-		if (rc == -1) {
+		if (rv == -1) {
+			rc = -1;
 			fprintf(stdout, "== Slots on disk %s NOT dumped\n", s->devname);
 		}
 	}
-	return 0;
+	return rc;
 }
 
 int ping_via_slots(const char *name, struct servants_list_item *servants)
@@ -931,17 +935,20 @@ int dump_headers(struct servants_list_item *servants)
 	struct sbd_context *st;
 
 	for (s = servants; s; s = s->next) {
+		int rv;
+
 		fprintf(stdout, "==Dumping header on disk %s\n", s->devname);
 		st = open_device(s->devname, LOG_WARNING);
-		if (!st) {
+		if (st) {
+			rv = header_dump(st);
+			close_device(st);
+		} else {
 			fprintf(stdout, "== disk %s unreadable!\n", s->devname);
-			continue;
+			rv = -1;
 		}
 
-		rc = header_dump(st);
-		close_device(st);
-
-		if (rc == -1) {
+		if (rv == -1) {
+			rc = -1;
 			fprintf(stdout, "==Header on disk %s NOT dumped\n", s->devname);
 		} else {
 			fprintf(stdout, "==Header on disk %s is dumped\n", s->devname);
@@ -1094,7 +1101,7 @@ int servant(const char *diskname, int mode, const void* argp)
 		exit(EXIT_MD_IO_FAIL);
 	}
 
-	DBGLOG(LOG_INFO, "Monitoring slot %d on disk %s", mbox, diskname);
+	cl_log(LOG_NOTICE, "Monitoring slot %d on disk %s", mbox, diskname);
 	if (s_header->minor_version == 0) {
 		set_proc_title("sbd: watcher: %s - slot: %d", diskname, mbox);
 	} else {
@@ -1142,7 +1149,7 @@ int servant(const char *diskname, int mode, const void* argp)
 		if (ppid == 1) {
 			/* Our parent died unexpectedly. Triggering
 			 * self-fence. */
-			do_reset();
+			do_timeout_action();
 		}
 
 		/* These attempts are, by definition, somewhat racy. If
@@ -1177,7 +1184,7 @@ int servant(const char *diskname, int mode, const void* argp)
 		}
 
 		if (s_mbox->cmd > 0) {
-			cl_log(LOG_INFO,
+			cl_log(LOG_NOTICE,
 			       "Received command %s from %s on disk %s",
 			       char2cmd(s_mbox->cmd), s_mbox->from, diskname);
 
@@ -1219,7 +1226,7 @@ int servant(const char *diskname, int mode, const void* argp)
 			       (int)latency, (int)timeout_watchdog_warn,
 			       diskname);
 		} else if (debug) {
-			DBGLOG(LOG_INFO, "Latency: %d on disk %s", (int)latency,
+			DBGLOG(LOG_DEBUG, "Latency: %d on disk %s", (int)latency,
 			       diskname);
 		}
 	}

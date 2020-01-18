@@ -58,6 +58,31 @@
 
 #include "sbd.h"
 
+#ifndef HAVE_PE_NEW_WORKING_SET
+
+#define pe_reset_working_set(data_set) cleanup_calculations(data_set)
+
+static pe_working_set_t *
+pe_new_working_set()
+{
+	pe_working_set_t *data_set = calloc(1, sizeof(pe_working_set_t));
+	if (data_set != NULL) {
+		set_working_set_defaults(data_set);
+	}
+	return data_set;
+}
+
+static void
+pe_free_working_set(pe_working_set_t *data_set)
+{
+	if (data_set != NULL) {
+		pe_reset_working_set(data_set);
+		free(data_set);
+	}
+}
+
+#endif
+
 extern int disk_count;
 
 static void clean_up(int rc);
@@ -74,6 +99,7 @@ static int cib_connected = 0;
 
 static cib_t *cib = NULL;
 static xmlNode *current_cib = NULL;
+static pe_working_set_t *data_set = NULL;
 
 static long last_refresh = 0;
 
@@ -109,6 +135,38 @@ mon_cib_connection_destroy(gpointer user_data)
 	return;
 }
 
+static void
+mon_retrieve_current_cib()
+{
+	xmlNode *xml_cib = NULL;
+	int options = cib_scope_local | cib_sync_call;
+	int rc = pcmk_ok;
+
+	free_xml(current_cib);
+	current_cib = NULL;
+
+	rc = cib->cmds->query(cib, NULL, &xml_cib, options);
+
+	if (rc != pcmk_ok) {
+		crm_err("Couldn't retrieve the CIB: %s (%d)", pcmk_strerror(rc), rc);
+		free_xml(xml_cib);
+		return;
+
+	} else if (xml_cib == NULL) {
+		crm_err("Couldn't retrieve the CIB: empty result");
+		return;
+	}
+
+	if (safe_str_eq(crm_element_name(xml_cib), XML_TAG_CIB)) {
+		current_cib = xml_cib;
+
+	} else {
+		free_xml(xml_cib);
+	}
+
+	return;
+}
+
 static gboolean
 mon_timer_notify(gpointer data)
 {
@@ -121,8 +179,7 @@ mon_timer_notify(gpointer data)
 
 	if (cib_connected) {
 		if (counter == counter_max) {
-			free_xml(current_cib);
-			current_cib = get_cib_copy(cib);
+			mon_retrieve_current_cib();
 			mon_refresh_state(NULL);
 			counter = 0;
 		} else {
@@ -163,7 +220,7 @@ cib_connect(gboolean full)
 			return rc;
 		}
 
-		current_cib = get_cib_copy(cib);
+		mon_retrieve_current_cib();
 		mon_refresh_state(NULL);
 
 		if (full) {
@@ -308,7 +365,7 @@ crm_diff_update(const char *event, xmlNode * msg)
 	}
 
 	if (current_cib == NULL) {
-		current_cib = get_cib_copy(cib);
+		mon_retrieve_current_cib();
 	}
 
     /* Refresh
@@ -330,7 +387,6 @@ static gboolean
 mon_refresh_state(gpointer user_data)
 {
     xmlNode *cib_copy = NULL;
-    pe_working_set_t data_set;
 
     if(current_cib == NULL) {
         return FALSE;
@@ -351,14 +407,13 @@ mon_refresh_state(gpointer user_data)
 
     } else {
         last_refresh = time(NULL);
-        set_working_set_defaults(&data_set);
-        data_set.input = cib_copy;
-        data_set.flags |= pe_flag_have_stonith_resource;
-        cluster_status(&data_set);
+        data_set->input = cib_copy;
+        data_set->flags |= pe_flag_have_stonith_resource;
+        cluster_status(data_set);
 
-        compute_status(&data_set);
+        compute_status(data_set);
 
-        cleanup_calculations(&data_set);
+        pe_reset_working_set(data_set);
     }
 
     return FALSE;
@@ -367,6 +422,21 @@ mon_refresh_state(gpointer user_data)
 static void
 clean_up(int rc)
 {
+	if (timer_id_reconnect > 0) {
+		g_source_remove(timer_id_reconnect);
+		timer_id_reconnect = 0;
+	}
+
+	if (timer_id_notify > 0) {
+		g_source_remove(timer_id_notify);
+		timer_id_notify = 0;
+	}
+
+	if (data_set != NULL) {
+		pe_free_working_set(data_set);
+		data_set = NULL;
+	}
+
 	if (cib != NULL) {
 		cib->cmds->signoff(cib);
 		cib_delete(cib);
@@ -385,7 +455,7 @@ servant_pcmk(const char *diskname, int mode, const void* argp)
 	int exit_code = 0;
 
         crm_system_name = strdup("sbd:pcmk");
-	cl_log(LOG_INFO, "Monitoring Pacemaker health");
+	cl_log(LOG_NOTICE, "Monitoring Pacemaker health");
 	set_proc_title("sbd: watcher: Pacemaker");
         setenv("PCMK_watchdog", "true", 1);
 
@@ -393,6 +463,14 @@ servant_pcmk(const char *diskname, int mode, const void* argp)
             /* We don't want any noisy crm messages */
             set_crm_log_level(LOG_CRIT);
         }
+
+
+	if (data_set == NULL) {
+		data_set = pe_new_working_set();
+	}
+	if (data_set == NULL) {
+		return -1;
+	}
 
 	if (current_cib == NULL) {
 		cib = cib_new();

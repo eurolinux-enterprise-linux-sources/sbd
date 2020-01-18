@@ -294,7 +294,7 @@ node must be manually "unfenced" by sending an empty message to it:
 Set the start-up wait time for devices. (Defaults to I<120>.)
 
 Dynamic block devices such as iSCSI might not be fully initialized and
-present yet. This allows to set a timeout for waiting for devices to
+present yet. This allows one to set a timeout for waiting for devices to
 appear on start-up. If set to 0, start-up will be aborted immediately if
 no devices are available.
 
@@ -332,6 +332,23 @@ setting before triggering the dump. Otherwise, the watchdog might trigger and
 prevent a successful crashdump from ever being written.
 
 Defaults to 240 seconds. Set to zero to disable.
+
+=item B<-r> I<N>
+
+Actions to be executed when the watchers don't timely report to the sbd
+master process or one of the watchers detects that the master process
+has died.
+
+Set timeout-action to comma-separated combination of
+noflush|flush plus reboot|crashdump|off.
+If just one of both is given the other stays at the default.
+
+This doesn't affect actions like off, crashdump, reboot explicitly
+triggered via message slots.
+And it does as well not configure the action a watchdog would
+trigger should it run off (there is no generic interface).
+
+Defaults to flush,reboot.
 
 =back
 
@@ -393,6 +410,30 @@ automatically during start-up, and setting this manually could overwrite
 a fencing message by the cluster.
 
 =back
+
+=head2 query-watchdog
+
+Example usage:
+
+	sbd query-watchdog
+
+Check for available watchdog devices and print some info.
+
+B<Warning>: This command will arm the watchdog during query, and if your
+watchdog refuses disarming (for example, if its kernel module has the
+'nowayout' parameter set) this will reset your system.
+
+=head2 test-watchdog
+
+Example usage:
+
+	sbd test-watchdog [-w /dev/watchdog3]
+
+Test specified watchdog device (/dev/watchdog by default).
+
+B<Warning>: This command will arm the watchdog and have your system reset
+in case your watchdog is working properly! If issued from an interactive
+session, it will prompt for confirmation.
 
 =head1 Base system configuration
 
@@ -528,6 +569,8 @@ options to pass to the daemon:
 
 C<sbd> will fail to start if no C<SBD_DEVICE> is specified. See the
 installed template for more options that can be configured here.
+In general configuration done via parameters takes precedence over
+the configuration from the configuration file.
 
 =head2 Testing the sbd installation
 

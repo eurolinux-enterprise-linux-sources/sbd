@@ -1,0 +1,302 @@
+From a716a8ddd3df615009bcff3bd96dd9ae64cb5f68 Mon Sep 17 00:00:00 2001
+From: Klaus Wenninger <klaus.wenninger@aon.at>
+Date: Tue, 19 Mar 2019 21:36:15 +0100
+Subject: [PATCH] Fix: sbd-pacemaker: make handling of cib-connection loss more
+ robust
+
+Exit pcmk-servant on graceful pacemaker shutdown and go back
+to state before pacemaker was detected initially.
+Purge all cib-traces otherwise and try to reconnect within timeout.
+---
+ src/sbd-inquisitor.c | 24 ++++++++++++++++++++----
+ src/sbd-md.c         | 30 +++++++++++++++---------------
+ src/sbd-pacemaker.c  | 38 +++++++++++++++++++++++++++++---------
+ src/sbd.h            | 11 +++++++----
+ 4 files changed, 71 insertions(+), 32 deletions(-)
+
+diff --git a/src/sbd-inquisitor.c b/src/sbd-inquisitor.c
+index 9be6c99..77c6e4f 100644
+--- a/src/sbd-inquisitor.c
++++ b/src/sbd-inquisitor.c
+@@ -490,19 +490,19 @@ void inquisitor_child(void)
+ 					if (sbd_is_disk(s)) {
+ 						if (WIFEXITED(status)) {
+ 							switch(WEXITSTATUS(status)) {
+-								case EXIT_MD_IO_FAIL:
++								case EXIT_MD_SERVANT_IO_FAIL:
+ 									DBGLOG(LOG_INFO, "Servant for %s requests to be disowned",
+ 										s->devname);
+ 									break;
+-								case EXIT_MD_REQUEST_RESET:
++								case EXIT_MD_SERVANT_REQUEST_RESET:
+ 									cl_log(LOG_WARNING, "%s requested a reset", s->devname);
+ 									do_reset();
+ 									break;
+-								case EXIT_MD_REQUEST_SHUTOFF:
++								case EXIT_MD_SERVANT_REQUEST_SHUTOFF:
+ 									cl_log(LOG_WARNING, "%s requested a shutoff", s->devname);
+ 									do_off();
+ 									break;
+-								case EXIT_MD_REQUEST_CRASHDUMP:
++								case EXIT_MD_SERVANT_REQUEST_CRASHDUMP:
+ 									cl_log(LOG_WARNING, "%s requested a crashdump", s->devname);
+ 									do_crashdump();
+ 									break;
+@@ -510,6 +510,22 @@ void inquisitor_child(void)
+ 									break;
+ 							}
+ 						}
++					} else if (sbd_is_pcmk(s)) {
++						if (WIFEXITED(status)) {
++							switch(WEXITSTATUS(status)) {
++								case EXIT_PCMK_SERVANT_GRACEFUL_SHUTDOWN:
++									DBGLOG(LOG_INFO, "PCMK-Servant has exited gracefully");
++									/* revert to state prior to pacemaker-detection */
++									s->restarts = 0;
++									s->restart_blocked = 0;
++									cluster_appeared = 0;
++									s->outdated = 1;
++									s->t_last.tv_sec = 0;
++									break;
++								default:
++									break;
++							}
++						}
+ 					}
+ 					cleanup_servant_by_pid(pid);
+ 				}
+diff --git a/src/sbd-md.c b/src/sbd-md.c
+index ba2c34d..c51d381 100644
+--- a/src/sbd-md.c
++++ b/src/sbd-md.c
+@@ -1061,19 +1061,19 @@ int servant_md(const char *diskname, int mode, const void* argp)
+ 
+ 	st = open_device(diskname, LOG_WARNING);
+ 	if (!st) {
+-		exit(EXIT_MD_IO_FAIL);
++		exit(EXIT_MD_SERVANT_IO_FAIL);
+ 	}
+ 
+ 	s_header = header_get(st);
+ 	if (!s_header) {
+ 		cl_log(LOG_ERR, "Not a valid header on %s", diskname);
+-		exit(EXIT_MD_IO_FAIL);
++		exit(EXIT_MD_SERVANT_IO_FAIL);
+ 	}
+ 
+ 	if (servant_check_timeout_inconsistent(s_header) < 0) {
+ 		cl_log(LOG_ERR, "Timeouts on %s do not match first device",
+ 				diskname);
+-		exit(EXIT_MD_IO_FAIL);
++		exit(EXIT_MD_SERVANT_IO_FAIL);
+ 	}
+ 
+ 	if (s_header->minor_version > 0) {
+@@ -1086,14 +1086,14 @@ int servant_md(const char *diskname, int mode, const void* argp)
+ 		cl_log(LOG_ERR,
+ 		       "No slot allocated, and automatic allocation failed for disk %s.",
+ 		       diskname);
+-		rc = EXIT_MD_IO_FAIL;
++		rc = EXIT_MD_SERVANT_IO_FAIL;
+ 		goto out;
+ 	}
+ 	s_node = sector_alloc();
+ 	if (slot_read(st, mbox, s_node) < 0) {
+ 		cl_log(LOG_ERR, "Unable to read node entry on %s",
+ 				diskname);
+-		exit(EXIT_MD_IO_FAIL);
++		exit(EXIT_MD_SERVANT_IO_FAIL);
+ 	}
+ 
+ 	cl_log(LOG_NOTICE, "Monitoring slot %d on disk %s", mbox, diskname);
+@@ -1109,7 +1109,7 @@ int servant_md(const char *diskname, int mode, const void* argp)
+ 		if (mode > 0) {
+ 			if (mbox_read(st, mbox, s_mbox) < 0) {
+ 				cl_log(LOG_ERR, "mbox read failed during start-up in servant.");
+-				rc = EXIT_MD_IO_FAIL;
++				rc = EXIT_MD_SERVANT_IO_FAIL;
+ 				goto out;
+ 			}
+ 			if (s_mbox->cmd != SBD_MSG_EXIT &&
+@@ -1125,7 +1125,7 @@ int servant_md(const char *diskname, int mode, const void* argp)
+ 		DBGLOG(LOG_INFO, "First servant start - zeroing inbox");
+ 		memset(s_mbox, 0, sizeof(*s_mbox));
+ 		if (mbox_write(st, mbox, s_mbox) < 0) {
+-			rc = EXIT_MD_IO_FAIL;
++			rc = EXIT_MD_SERVANT_IO_FAIL;
+ 			goto out;
+ 		}
+ 	}
+@@ -1154,28 +1154,28 @@ int servant_md(const char *diskname, int mode, const void* argp)
+ 		s_header_retry = header_get(st);
+ 		if (!s_header_retry) {
+ 			cl_log(LOG_ERR, "No longer found a valid header on %s", diskname);
+-			exit(EXIT_MD_IO_FAIL);
++			exit(EXIT_MD_SERVANT_IO_FAIL);
+ 		}
+ 		if (memcmp(s_header, s_header_retry, sizeof(*s_header)) != 0) {
+ 			cl_log(LOG_ERR, "Header on %s changed since start-up!", diskname);
+-			exit(EXIT_MD_IO_FAIL);
++			exit(EXIT_MD_SERVANT_IO_FAIL);
+ 		}
+ 		free(s_header_retry);
+ 
+ 		s_node_retry = sector_alloc();
+ 		if (slot_read(st, mbox, s_node_retry) < 0) {
+ 			cl_log(LOG_ERR, "slot read failed in servant.");
+-			exit(EXIT_MD_IO_FAIL);
++			exit(EXIT_MD_SERVANT_IO_FAIL);
+ 		}
+ 		if (memcmp(s_node, s_node_retry, sizeof(*s_node)) != 0) {
+ 			cl_log(LOG_ERR, "Node entry on %s changed since start-up!", diskname);
+-			exit(EXIT_MD_IO_FAIL);
++			exit(EXIT_MD_SERVANT_IO_FAIL);
+ 		}
+ 		free(s_node_retry);
+ 
+ 		if (mbox_read(st, mbox, s_mbox) < 0) {
+ 			cl_log(LOG_ERR, "mbox read failed in servant.");
+-			exit(EXIT_MD_IO_FAIL);
++			exit(EXIT_MD_SERVANT_IO_FAIL);
+ 		}
+ 
+ 		if (s_mbox->cmd > 0) {
+@@ -1190,14 +1190,14 @@ int servant_md(const char *diskname, int mode, const void* argp)
+ 				sigqueue(ppid, SIG_TEST, signal_value);
+ 				break;
+ 			case SBD_MSG_RESET:
+-				exit(EXIT_MD_REQUEST_RESET);
++				exit(EXIT_MD_SERVANT_REQUEST_RESET);
+ 			case SBD_MSG_OFF:
+-				exit(EXIT_MD_REQUEST_SHUTOFF);
++				exit(EXIT_MD_SERVANT_REQUEST_SHUTOFF);
+ 			case SBD_MSG_EXIT:
+ 				sigqueue(ppid, SIG_EXITREQ, signal_value);
+ 				break;
+ 			case SBD_MSG_CRASHDUMP:
+-				exit(EXIT_MD_REQUEST_CRASHDUMP);
++				exit(EXIT_MD_SERVANT_REQUEST_CRASHDUMP);
+ 			default:
+ 				/* FIXME:
+ 				   An "unknown" message might result
+diff --git a/src/sbd-pacemaker.c b/src/sbd-pacemaker.c
+index aac355a..c69fc55 100644
+--- a/src/sbd-pacemaker.c
++++ b/src/sbd-pacemaker.c
+@@ -103,6 +103,9 @@ static pe_working_set_t *data_set = NULL;
+ 
+ static long last_refresh = 0;
+ 
++static int pcmk_clean_shutdown = 0;
++static int pcmk_shutdown = 0;
++
+ static gboolean
+ mon_timer_reconnect(gpointer data)
+ {
+@@ -128,10 +131,26 @@ mon_cib_connection_destroy(gpointer user_data)
+ {
+ 	if (cib) {
+ 		cib->cmds->signoff(cib);
++		/* retrigger as last one might have been skipped */
++		mon_refresh_state(NULL);
++		if (pcmk_clean_shutdown) {
++			/* assume a graceful pacemaker-shutdown */
++			clean_up(EXIT_PCMK_SERVANT_GRACEFUL_SHUTDOWN);
++		}
++		/* getting here we aren't sure about the pacemaker-state
++		   so try to use the timeout to reconnect and get
++		   everything sorted out again
++		 */
++		pcmk_shutdown = 0;
+ 		set_servant_health(pcmk_health_transient, LOG_WARNING, "Disconnected from CIB");
+ 		timer_id_reconnect = g_timeout_add(reconnect_msec, mon_timer_reconnect, NULL);
+ 	}
+ 	cib_connected = 0;
++	/* no sense in looking into outdated cib, trying to apply patch, ... */
++	if (current_cib) {
++		free_xml(current_cib);
++		current_cib = NULL;
++	}
+ 	return;
+ }
+ 
+@@ -171,7 +190,7 @@ static gboolean
+ mon_timer_notify(gpointer data)
+ {
+ 	static int counter = 0;
+-	int counter_max = timeout_watchdog / timeout_loop;
++	int counter_max = timeout_watchdog / timeout_loop / 2;
+ 
+ 	if (timer_id_notify > 0) {
+ 		g_source_remove(timer_id_notify);
+@@ -280,11 +299,6 @@ compute_status(pe_working_set_t * data_set)
+     } else if (node->details->pending) {
+         set_servant_health(pcmk_health_pending, LOG_WARNING, "Node state: pending");
+ 
+-#if 0
+-    } else if (node->details->shutdown) {
+-        set_servant_health(pcmk_health_shutdown, LOG_WARNING, "Node state: shutting down");
+-#endif
+-
+     } else if (data_set->flags & pe_flag_have_quorum) {
+         set_servant_health(pcmk_health_online, LOG_INFO, "Node state: online");
+         ever_had_quorum = TRUE;
+@@ -315,6 +329,12 @@ compute_status(pe_working_set_t * data_set)
+         }
+     }
+ 
++    if (node->details->shutdown) {
++        pcmk_shutdown = 1;
++    }
++    if (pcmk_shutdown && !(node->details->running_rsc)) {
++        pcmk_clean_shutdown = 1;
++    }
+     notify_parent();
+     return;
+ }
+@@ -339,7 +359,7 @@ crm_diff_update(const char *event, xmlNode * msg)
+         static mainloop_timer_t *refresh_timer = NULL;
+ 
+         if(refresh_timer == NULL) {
+-            refresh_timer = mainloop_timer_add("refresh", 2000, FALSE, mon_trigger_refresh, NULL);
++            refresh_timer = mainloop_timer_add("refresh", reconnect_msec, FALSE, mon_trigger_refresh, NULL);
+             refresh_trigger = mainloop_add_trigger(G_PRIORITY_LOW, mon_refresh_state, refresh_timer);
+         }
+ 
+@@ -369,9 +389,9 @@ crm_diff_update(const char *event, xmlNode * msg)
+ 	}
+ 
+     /* Refresh
+-     * - immediately if the last update was more than 5s ago
++     * - immediately if the last update was more than 1s ago
+      * - every 10 updates
+-     * - at most 2s after the last update
++     * - at most 1s after the last update
+      */
+     if (updates > 10 || (now - last_refresh) > (reconnect_msec / 1000)) {
+         mon_refresh_state(refresh_timer);
+diff --git a/src/sbd.h b/src/sbd.h
+index 6fe07f9..3b05a11 100644
+--- a/src/sbd.h
++++ b/src/sbd.h
+@@ -54,10 +54,13 @@
+ /* FIXME: should add dynamic check of SIG_XX >= SIGRTMAX */
+ 
+ /* exit status for disk-servant */
+-#define EXIT_MD_IO_FAIL             20
+-#define EXIT_MD_REQUEST_RESET       21
+-#define EXIT_MD_REQUEST_SHUTOFF     22
+-#define EXIT_MD_REQUEST_CRASHDUMP   23
++#define EXIT_MD_SERVANT_IO_FAIL             20
++#define EXIT_MD_SERVANT_REQUEST_RESET       21
++#define EXIT_MD_SERVANT_REQUEST_SHUTOFF     22
++#define EXIT_MD_SERVANT_REQUEST_CRASHDUMP   23
++
++/* exit status for pcmk-servant */
++#define EXIT_PCMK_SERVANT_GRACEFUL_SHUTDOWN 30
+ 
+ #define HOG_CHAR	0xff
+ #define SECTOR_NAME_MAX 63
+-- 
+1.8.3.1
+
