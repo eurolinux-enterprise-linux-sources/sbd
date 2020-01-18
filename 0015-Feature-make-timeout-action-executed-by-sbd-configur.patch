@@ -1,0 +1,294 @@
+From b64c30af56e7eabd63ce1db25bc5ed9b953485af Mon Sep 17 00:00:00 2001
+From: Klaus Wenninger <klaus.wenninger@aon.at>
+Date: Fri, 23 Nov 2018 14:09:22 +0100
+Subject: [PATCH] Feature: make timeout-action executed by sbd configurable
+
+---
+ man/sbd.8.pod        | 19 +++++++++++++++++++
+ src/sbd-common.c     | 22 ++++++++++++++++------
+ src/sbd-inquisitor.c | 53 +++++++++++++++++++++++++++++++++++++++++++++++++---
+ src/sbd-md.c         |  2 +-
+ src/sbd.h            |  3 +++
+ src/sbd.sysconfig    | 18 ++++++++++++++++++
+ 6 files changed, 107 insertions(+), 10 deletions(-)
+
+diff --git a/man/sbd.8.pod b/man/sbd.8.pod
+index ffd01c2..dbb3855 100644
+--- a/man/sbd.8.pod
++++ b/man/sbd.8.pod
+@@ -333,6 +333,23 @@ prevent a successful crashdump from ever being written.
+ 
+ Defaults to 240 seconds. Set to zero to disable.
+ 
++=item B<-r> I<N>
++
++Actions to be executed when the watchers don't timely report to the sbd
++master process or one of the watchers detects that the master process
++has died.
++
++Set timeout-action to comma-separated combination of
++noflush|flush plus reboot|crashdump|off.
++If just one of both is given the other stays at the default.
++
++This doesn't affect actions like off, crashdump, reboot explicitly
++triggered via message slots.
++And it does as well not configure the action a watchdog would
++trigger should it run off (there is no generic interface).
++
++Defaults to flush,reboot.
++
+ =back
+ 
+ =head2 allocate
+@@ -552,6 +569,8 @@ options to pass to the daemon:
+ 
+ C<sbd> will fail to start if no C<SBD_DEVICE> is specified. See the
+ installed template for more options that can be configured here.
++In general configuration done via parameters takes precedence over
++the configuration from the configuration file.
+ 
+ =head2 Testing the sbd installation
+ 
+diff --git a/src/sbd-common.c b/src/sbd-common.c
+index cc84cd0..0e8be65 100644
+--- a/src/sbd-common.c
++++ b/src/sbd-common.c
+@@ -98,6 +98,8 @@ usage(void)
+ "			(default is 1, set to 0 to disable)\n"
+ "-P		Check Pacemaker quorum and node health (optional, watch only)\n"
+ "-Z		Enable trace mode. WARNING: UNSAFE FOR PRODUCTION!\n"
++"-r		Set timeout-action to comma-separated combination of\n"
++"		noflush|flush plus reboot|crashdump|off (default is flush,reboot)\n"
+ "Commands:\n"
+ #if SUPPORT_SHARED_DISK
+ "create		initialize N slots on <dev> - OVERWRITES DEVICE!\n"
+@@ -769,7 +771,7 @@ sysrq_trigger(char t)
+ 
+ 
+ static void
+-do_exit(char kind) 
++do_exit(char kind, bool do_flush)
+ {
+     /* TODO: Turn debug_mode into a bit field? Delay + kdump for example */
+     const char *reason = NULL;
+@@ -814,7 +816,9 @@ do_exit(char kind)
+     }
+ 
+     cl_log(LOG_EMERG, "Rebooting system: %s", reason);
+-    sync();
++    if (do_flush) {
++        sync();
++    }
+ 
+     if(kind == 'c') {
+         watchdog_close(true);
+@@ -834,19 +838,25 @@ do_exit(char kind)
+ void
+ do_crashdump(void)
+ {
+-    do_exit('c');
++    do_exit('c', true);
+ }
+ 
+ void
+ do_reset(void)
+ {
+-    do_exit('b');
++    do_exit('b', true);
+ }
+ 
+ void
+ do_off(void)
+ {
+-    do_exit('o');
++    do_exit('o', true);
++}
++
++void
++do_timeout_action(void)
++{
++	do_exit(timeout_sysrq_char, do_flush);
+ }
+ 
+ /*
+@@ -980,7 +990,7 @@ notify_parent(void)
+         /* Our parent died unexpectedly. Triggering
+          * self-fence. */
+         cl_log(LOG_WARNING, "Our parent is dead.");
+-        do_reset();
++        do_timeout_action();
+     }
+ 
+     switch (servant_health) {
+diff --git a/src/sbd-inquisitor.c b/src/sbd-inquisitor.c
+index 9b193d4..8e0bc87 100644
+--- a/src/sbd-inquisitor.c
++++ b/src/sbd-inquisitor.c
+@@ -31,6 +31,8 @@ int	servant_restart_interval = 5;
+ int	servant_restart_count = 1;
+ int	start_mode = 0;
+ char*	pidfile = NULL;
++bool do_flush = true;
++char timeout_sysrq_char = 'b';
+ 
+ int parse_device_line(const char *line);
+ 
+@@ -655,7 +657,7 @@ void inquisitor_child(void)
+ 				/* At level 2 or above, we do nothing, but expect
+ 				 * things to eventually return to
+ 				 * normal. */
+-				do_reset();
++				do_timeout_action();
+ 			} else {
+ 				cl_log(LOG_ERR, "SBD: DEBUG MODE: Would have fenced due to timeout!");
+ 			}
+@@ -668,7 +670,7 @@ void inquisitor_child(void)
+ 
+                         if (debug_mode && watchdog_use) {
+                             /* In debug mode, trigger a reset before the watchdog can panic the machine */
+-                            do_reset();
++                            do_timeout_action();
+                         }
+ 		}
+ 
+@@ -833,6 +835,7 @@ int main(int argc, char **argv, char **envp)
+         int qb_facility;
+         const char *value = NULL;
+         int start_delay = 0;
++        char *timeout_action = NULL;
+ 
+ 	if ((cmdname = strrchr(argv[0], '/')) == NULL) {
+ 		cmdname = argv[0];
+@@ -928,7 +931,12 @@ int main(int argc, char **argv, char **envp)
+         }
+         cl_log(LOG_DEBUG, "Start delay: %d (%s)", (int)start_delay, value?value:"default");
+ 
+-	while ((c = getopt(argc, argv, "czC:DPRTWZhvw:d:n:p:1:2:3:4:5:t:I:F:S:s:")) != -1) {
++        value = getenv("SBD_TIMEOUT_ACTION");
++        if(value) {
++            timeout_action = strdup(value);
++        }
++
++	while ((c = getopt(argc, argv, "czC:DPRTWZhvw:d:n:p:1:2:3:4:5:t:I:F:S:s:r:")) != -1) {
+ 		switch (c) {
+ 		case 'D':
+ 			break;
+@@ -1043,6 +1051,12 @@ int main(int argc, char **argv, char **envp)
+ 			cl_log(LOG_INFO, "Servant restart count set to %d",
+ 					(int)servant_restart_count);
+ 			break;
++		case 'r':
++			if (timeout_action) {
++				free(timeout_action);
++			}
++			timeout_action = strdup(optarg);
++			break;
+ 		case 'h':
+ 			usage();
+ 			return (0);
+@@ -1101,6 +1115,39 @@ int main(int argc, char **argv, char **envp)
+ 		goto out;
+ 	}
+ 
++	if (timeout_action) {
++		char *p[2];
++		int i;
++		char c;
++		int nrflags = sscanf(timeout_action, "%m[a-z],%m[a-z]%c", &p[0], &p[1], &c);
++		bool parse_error = (nrflags < 1) || (nrflags > 2);
++
++		for (i = 0; (i < nrflags) && (i < 2); i++) {
++			if (!strcmp(p[i], "reboot")) {
++				timeout_sysrq_char = 'b';
++			} else if (!strcmp(p[i], "crashdump")) {
++				timeout_sysrq_char = 'c';
++			} else if (!strcmp(p[i], "off")) {
++				timeout_sysrq_char = 'o';
++			} else if (!strcmp(p[i], "flush")) {
++				do_flush = true;
++			} else if (!strcmp(p[i], "noflush")) {
++				do_flush = false;
++			} else {
++				parse_error = true;
++			}
++			free(p[i]);
++		}
++		if (parse_error) {
++			fprintf(stderr, "Failed to parse timeout-action \"%s\".\n",
++				timeout_action);
++			exit_status = -1;
++			goto out;
++		}
++	}
++	cl_log(LOG_NOTICE, "%s flush + writing \'%c\' to sysrq on timeout",
++		do_flush?"Doing":"Skipping", timeout_sysrq_char);
++
+ #if SUPPORT_SHARED_DISK
+ 	if (strcmp(argv[optind], "create") == 0) {
+ 		exit_status = init_devices(servants_leader);
+diff --git a/src/sbd-md.c b/src/sbd-md.c
+index a736118..579d273 100644
+--- a/src/sbd-md.c
++++ b/src/sbd-md.c
+@@ -1149,7 +1149,7 @@ int servant(const char *diskname, int mode, const void* argp)
+ 		if (ppid == 1) {
+ 			/* Our parent died unexpectedly. Triggering
+ 			 * self-fence. */
+-			do_reset();
++			do_timeout_action();
+ 		}
+ 
+ 		/* These attempts are, by definition, somewhat racy. If
+diff --git a/src/sbd.h b/src/sbd.h
+index 0f8847a..386c85c 100644
+--- a/src/sbd.h
++++ b/src/sbd.h
+@@ -130,6 +130,7 @@ void sysrq_trigger(char t);
+ void do_crashdump(void);
+ void do_reset(void);
+ void do_off(void);
++void do_timeout_action(void);
+ pid_t make_daemon(void);
+ void maximize_priority(void);
+ void sbd_get_uname(void);
+@@ -153,6 +154,8 @@ extern int  debug_mode;
+ extern char *watchdogdev;
+ extern bool watchdogdev_is_default;
+ extern char*  local_uname;
++extern bool do_flush;
++extern char timeout_sysrq_char;
+ 
+ /* Global, non-tunable variables: */
+ extern int  sector_size;
+diff --git a/src/sbd.sysconfig b/src/sbd.sysconfig
+index c6d7c07..8f38426 100644
+--- a/src/sbd.sysconfig
++++ b/src/sbd.sysconfig
+@@ -71,6 +71,24 @@ SBD_WATCHDOG_DEV=/dev/watchdog
+ SBD_WATCHDOG_TIMEOUT=5
+ 
+ ## Type: string
++## Default: "flush,reboot"
++#
++# Actions to be executed when the watchers don't timely report to the sbd
++# master process or one of the watchers detects that the master process
++# has died.
++#
++# Set timeout-action to comma-separated combination of
++# noflush|flush plus reboot|crashdump|off.
++# If just one of both is given the other stays at the default.
++#
++# This doesn't affect actions like off, crashdump, reboot explicitly
++# triggered via message slots.
++# And it does as well not configure the action a watchdog would
++# trigger should it run off (there is no generic interface).
++#
++SBD_TIMEOUT_ACTION=flush,reboot
++
++## Type: string
+ ## Default: ""
+ #
+ # Additional options for starting sbd
+-- 
+1.8.3.1
+

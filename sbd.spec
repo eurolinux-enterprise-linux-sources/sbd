@@ -25,7 +25,7 @@ Summary:        Storage-based death
 License:        GPLv2+
 Group:          System Environment/Daemons
 Version:        1.3.1
-Release:        %{buildnum}%{?dist}
+Release:        %{buildnum}%{?dist}.1
 Url:            https://github.com/%{github_owner}/%{name}
 Source0:        https://github.com/%{github_owner}/%{name}/archive/%{commit}/%{name}-%{commit}.tar.gz
 Patch0:         0001-make-pacemaker-dlm-wait-for-sbd-start.patch
@@ -34,6 +34,7 @@ Patch2:         0003-Doc-sbd.8.pod-add-query-test-watchdog.patch
 Patch11:        0012-Fix-sbd-common-don-t-follow-symlinks-outside-dev-for.patch
 Patch12:        0013-Refactor-sbd-common-separate-assignment-and-comparis.patch
 Patch13:        0014-Fix-sbd-common-avoid-statting-potential-links.patch
+Patch14:        0015-Feature-make-timeout-action-executed-by-sbd-configur.patch
 BuildRoot:      %{_tmppath}/%{name}-%{version}-build
 BuildRequires:  autoconf
 BuildRequires:  automake
@@ -131,6 +132,11 @@ fi
 %doc COPYING
 
 %changelog
+* Thu Jan 8 2019 Klaus Wenninger <kwenning@redhat.com> - 1.3.1-8.2.1
+- make timeout-action configurable
+
+  Resolves: rhbz#1666201
+
 * Wed Sep 19 2018 Klaus Wenninger <kwenning@redhat.com> - 1.3.1-8.2
 - avoid statting potential symlink-targets in /dev
 
