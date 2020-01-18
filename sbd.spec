@@ -18,7 +18,7 @@
 %global commit a74b4d25a3eb93fe1abbe6e3ebfd2b16cf48873f
 %global shortcommit %(c=%{commit}; echo ${c:0:7})
 %global github_owner Clusterlabs
-%global buildnum 7
+%global buildnum 8.2
 
 Name:           sbd
 Summary:        Storage-based death
@@ -31,6 +31,9 @@ Source0:        https://github.com/%{github_owner}/%{name}/archive/%{commit}/%{n
 Patch0:         0001-make-pacemaker-dlm-wait-for-sbd-start.patch
 Patch1:         0002-mention-timeout-caveat-with-SBD_DELAY_START.patch
 Patch2:         0003-Doc-sbd.8.pod-add-query-test-watchdog.patch
+Patch11:        0012-Fix-sbd-common-don-t-follow-symlinks-outside-dev-for.patch
+Patch12:        0013-Refactor-sbd-common-separate-assignment-and-comparis.patch
+Patch13:        0014-Fix-sbd-common-avoid-statting-potential-links.patch
 BuildRoot:      %{_tmppath}/%{name}-%{version}-build
 BuildRequires:  autoconf
 BuildRequires:  automake
@@ -46,7 +49,7 @@ BuildRequires:  pkgconfig
 BuildRequires:  python-devel
 
 %if 0%{?rhel} > 0
-ExclusiveArch: i686 x86_64 s390x ppc64le
+ExclusiveArch: i686 x86_64 s390x ppc64le aarch64
 %endif
 
 %if %{defined systemd_requires}
@@ -128,6 +131,21 @@ fi
 %doc COPYING
 
 %changelog
+* Wed Sep 19 2018 Klaus Wenninger <kwenning@redhat.com> - 1.3.1-8.2
+- avoid statting potential symlink-targets in /dev
+
+  Resolves: rhbz#1628988
+
+* Fri Sep 14 2018 Klaus Wenninger <kwenning@redhat.com> - 1.3.1-8.1
+- skip symlinks pointing to dev-nodes outside of /dev
+
+  Resolves: rhbz#1628988
+
+* Mon Apr 16 2018 <kwenning@redhat.com> - 1.3.1-8
+- Added aarch64 target
+
+  Resolves: rhbz#1568029
+
 * Mon Jan 15 2018 <kwenning@redhat.com> - 1.3.1-7
 - reenable sbd on upgrade so that additional
   links to make pacemaker properly depend on
