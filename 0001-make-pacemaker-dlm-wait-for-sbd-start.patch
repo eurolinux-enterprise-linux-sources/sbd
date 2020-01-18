@@ -1,0 +1,43 @@
+From 5f1ac8f07fd81a2c60db39dd5a28debbadfe3ec5 Mon Sep 17 00:00:00 2001
+From: Klaus Wenninger <klaus.wenninger@aon.at>
+Date: Thu, 14 Dec 2017 17:32:08 +0100
+Subject: [PATCH] Fix: systemd: make pacemaker & dlm wait for sbd-start to
+ complete
+
+---
+ src/sbd.service.in        | 4 +++-
+ src/sbd_remote.service.in | 2 +-
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/sbd.service.in b/src/sbd.service.in
+index ef1bd16..401c2d6 100644
+--- a/src/sbd.service.in
++++ b/src/sbd.service.in
+@@ -1,6 +1,7 @@
+ [Unit]
+ Description=Shared-storage based fencing daemon
+ Before=pacemaker.service
++Before=dlm.service
+ After=systemd-modules-load.service iscsi.service
+ PartOf=corosync.service
+ RefuseManualStop=true
+@@ -22,4 +23,5 @@ Restart=on-abort
+ 
+ [Install]
+ RequiredBy=corosync.service
+-
++RequiredBy=pacemaker.service
++RequiredBy=dlm.service
+diff --git a/src/sbd_remote.service.in b/src/sbd_remote.service.in
+index e05f80e..cefd511 100644
+--- a/src/sbd_remote.service.in
++++ b/src/sbd_remote.service.in
+@@ -21,4 +21,4 @@ Restart=on-abort
+ 
+ [Install]
+ RequiredBy=pacemaker_remote.service
+-
++RequiredBy=dlm.service
+-- 
+1.8.3.1
+

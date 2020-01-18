@@ -19,9 +19,6 @@
 #include "sbd.h"
 #include <sys/reboot.h>
 #include <sys/types.h>
-#ifdef __GLIBC__
-#include <sys/sysmacros.h>
-#endif
 #include <sys/stat.h>
 #include <pwd.h>
 #include <unistd.h>
@@ -98,8 +95,6 @@ usage(void)
 "			(default is 1, set to 0 to disable)\n"
 "-P		Check Pacemaker quorum and node health (optional, watch only)\n"
 "-Z		Enable trace mode. WARNING: UNSAFE FOR PRODUCTION!\n"
-"-r		Set timeout-action to comma-separated combination of\n"
-"		noflush|flush plus reboot|crashdump|off (default is flush,reboot)\n"
 "Commands:\n"
 #if SUPPORT_SHARED_DISK
 "create		initialize N slots on <dev> - OVERWRITES DEVICE!\n"
@@ -253,8 +248,7 @@ watchdog_close(bool disarm)
 #define MAX_WATCHDOGS 64
 #define SYS_CLASS_WATCHDOG "/sys/class/watchdog"
 #define SYS_CHAR_DEV_DIR "/sys/dev/char"
-#define WATCHDOG_NODEDIR "/dev/"
-#define WATCHDOG_NODEDIR_LEN 5
+#define WATCHDOG_NODEDIR "/dev"
 
 struct watchdog_list_item {
 	dev_t dev;
@@ -262,12 +256,6 @@ struct watchdog_list_item {
 	char *dev_ident;
 	char *dev_driver;
 	struct watchdog_list_item *next;
-};
-
-struct link_list_item {
-	char *dev_node;
-	char *link_name;
-	struct link_list_item *next;
 };
 
 static struct watchdog_list_item *watchdog_list = NULL;
@@ -280,10 +268,9 @@ watchdog_populate_list(void)
 		{makedev(10,130), 0};
 	int num_watchdogs = 1;
 	struct dirent *entry;
-	char entry_name[280];
+	char entry_name[64];
 	DIR *dp;
-	char buf[280] = "";
-	struct link_list_item *link_list = NULL;
+	char buf[256] = "";
 
 	if (watchdog_list != NULL) {
 		return;
@@ -297,7 +284,7 @@ watchdog_populate_list(void)
 				FILE *file;
 
 				snprintf(entry_name, sizeof(entry_name),
-				         SYS_CLASS_WATCHDOG "/%s/dev", entry->d_name);
+						SYS_CLASS_WATCHDOG "/%s/dev", entry->d_name);
 				file = fopen(entry_name, "r");
 				if (file) {
 					int major, minor;
@@ -318,59 +305,12 @@ watchdog_populate_list(void)
 	/* search for watchdog nodes in /dev */
 	dp = opendir(WATCHDOG_NODEDIR);
 	if (dp) {
-		/* first go for links and memorize them */
 		while ((entry = readdir(dp))) {
-			if (entry->d_type == DT_LNK) {
-				int len;
-
-				snprintf(entry_name, sizeof(entry_name),
-				         WATCHDOG_NODEDIR "%s", entry->d_name);
-
-				/* !realpath(entry_name, buf) unfortunately does a stat on
-				 * target so we can't really use it to check if links stay
-				 * within /dev without triggering e.g. AVC-logs (with
-				 * SELinux policy that just allows stat within /dev).
-				 * Without canonicalization that doesn't actually touch the
-				 * filesystem easily available introduce some limitations
-				 * for simplicity:
-				 * - just simple path without '..'
-				 * - just one level of symlinks (avoid e.g. loop-checking)
-				 */
-				len = readlink(entry_name, buf, sizeof(buf) - 1);
-				if ((len < 1) ||
-				    (len > sizeof(buf) - WATCHDOG_NODEDIR_LEN - 1)) {
-					continue;
-				}
-				buf[len] = '\0';
-				if (buf[0] != '/') {
-					memmove(&buf[WATCHDOG_NODEDIR_LEN], buf, len+1);
-					memcpy(buf, WATCHDOG_NODEDIR, WATCHDOG_NODEDIR_LEN);
-					len += WATCHDOG_NODEDIR_LEN;
-				}
-				if (strstr(buf, "/../") ||
-				    strncmp(WATCHDOG_NODEDIR, buf, WATCHDOG_NODEDIR_LEN)) {
-					continue;
-				} else {
-					/* just memorize to avoid statting the target - SELinux */
-					struct link_list_item *lli =
-						calloc(1, sizeof(struct link_list_item));
-
-					lli->dev_node = strdup(buf);
-					lli->link_name = strdup(entry_name);
-					lli->next = link_list;
-					link_list = lli;
-				}
-			}
-		}
-
-		rewinddir(dp);
-
-		while ((entry = readdir(dp))) {
-			if (entry->d_type == DT_CHR) {
+			if ((entry->d_type == DT_CHR) || (entry->d_type == DT_LNK)) {
 				struct stat statbuf;
 
 				snprintf(entry_name, sizeof(entry_name),
-				         WATCHDOG_NODEDIR "%s", entry->d_name);
+						WATCHDOG_NODEDIR "/%s", entry->d_name);
 				if(!stat(entry_name, &statbuf) && S_ISCHR(statbuf.st_mode)) {
 					int i;
 
@@ -378,9 +318,7 @@ watchdog_populate_list(void)
 						if (statbuf.st_rdev == watchdogs[i]) {
 							int wdfd = watchdog_init_fd(entry_name, -1);
 							struct watchdog_list_item *wdg =
-								calloc(1, sizeof(struct watchdog_list_item));
-							int len;
-							struct link_list_item *tmp_list = NULL;
+									calloc(1, sizeof(struct watchdog_list_item));
 
 							wdg->dev = watchdogs[i];
 							wdg->dev_node = strdup(entry_name);
@@ -400,40 +338,14 @@ watchdog_populate_list(void)
 							}
 
 							snprintf(entry_name, sizeof(entry_name),
-							         SYS_CHAR_DEV_DIR "/%d:%d/device/driver",
-							         major(watchdogs[i]), minor(watchdogs[i]));
-							len = readlink(entry_name, buf, sizeof(buf) - 1);
-							if (len > 0) {
-								buf[len] = '\0';
+								SYS_CHAR_DEV_DIR "/%d:%d/device/driver",
+								major(watchdogs[i]), minor(watchdogs[i]));
+							if (readlink(entry_name, buf, sizeof(buf)) > 0) {
 								wdg->dev_driver = strdup(basename(buf));
 							} else if ((wdg->dev_ident) &&
-							           (strcmp(wdg->dev_ident,
-							                   "Software Watchdog") == 0)) {
+										(strcmp(wdg->dev_ident,
+												"Software Watchdog") == 0)) {
 								wdg->dev_driver = strdup("softdog");
-							}
-
-							/* create dupes if we have memorized links
-							 * to this node
-							 */
-							for (tmp_list = link_list; tmp_list;
-							     tmp_list = tmp_list->next) {
-								if (!strcmp(tmp_list->dev_node,
-								            wdg->dev_node)) {
-									struct watchdog_list_item *dupe_wdg =
-										calloc(1, sizeof(struct watchdog_list_item));
-
-									/* as long as we never purge watchdog_list
-									 * there is no need to dupe strings
-									 */
-									*dupe_wdg = *wdg;
-									dupe_wdg->dev_node = strdup(tmp_list->link_name);
-									dupe_wdg->next = watchdog_list;
-									watchdog_list = dupe_wdg;
-									watchdog_list_items++;
-								}
-								/* for performance reasons we could remove
-								 * the link_list entry
-								 */
 							}
 							break;
 						}
@@ -441,18 +353,7 @@ watchdog_populate_list(void)
 				}
 			}
 		}
-
 		closedir(dp);
-	}
-
-	/* cleanup link list */
-	while (link_list) {
-		struct link_list_item *tmp_list = link_list;
-
-		link_list = link_list->next;
-		free(tmp_list->dev_node);
-		free(tmp_list->link_name);
-		free(tmp_list);
 	}
 }
 
@@ -771,7 +672,7 @@ sysrq_trigger(char t)
 
 
 static void
-do_exit(char kind, bool do_flush)
+do_exit(char kind) 
 {
     /* TODO: Turn debug_mode into a bit field? Delay + kdump for example */
     const char *reason = NULL;
@@ -780,12 +681,12 @@ do_exit(char kind, bool do_flush)
         cl_log(LOG_NOTICE, "Initiating kdump");
 
     } else if (debug_mode == 1) {
-        cl_log(LOG_WARNING, "Initiating kdump instead of panicking the node (debug mode)");
+        cl_log(LOG_WARNING, "Initiating kdump instead of panicing the node (debug mode)");
         kind = 'c';
     }
 
     if (debug_mode == 2) {
-        cl_log(LOG_WARNING, "Shutting down SBD instead of panicking the node (debug mode)");
+        cl_log(LOG_WARNING, "Shutting down SBD instead of panicing the node (debug mode)");
         watchdog_close(true);
         exit(0);
     }
@@ -816,9 +717,7 @@ do_exit(char kind, bool do_flush)
     }
 
     cl_log(LOG_EMERG, "Rebooting system: %s", reason);
-    if (do_flush) {
-        sync();
-    }
+    sync();
 
     if(kind == 'c') {
         watchdog_close(true);
@@ -838,25 +737,19 @@ do_exit(char kind, bool do_flush)
 void
 do_crashdump(void)
 {
-    do_exit('c', true);
+    do_exit('c');
 }
 
 void
 do_reset(void)
 {
-    do_exit('b', true);
+    do_exit('b');
 }
 
 void
 do_off(void)
 {
-    do_exit('o', true);
-}
-
-void
-do_timeout_action(void)
-{
-	do_exit(timeout_sysrq_char, do_flush);
+    do_exit('o');
 }
 
 /*
@@ -990,14 +883,14 @@ notify_parent(void)
         /* Our parent died unexpectedly. Triggering
          * self-fence. */
         cl_log(LOG_WARNING, "Our parent is dead.");
-        do_timeout_action();
+        do_reset();
     }
 
     switch (servant_health) {
         case pcmk_health_pending:
         case pcmk_health_shutdown:
         case pcmk_health_transient:
-            DBGLOG(LOG_DEBUG, "Not notifying parent: state transient (%d)", servant_health);
+            DBGLOG(LOG_INFO, "Not notifying parent: state transient (%d)", servant_health);
             break;
 
         case pcmk_health_unknown:
@@ -1008,7 +901,7 @@ notify_parent(void)
             break;
 
         case pcmk_health_online:
-            DBGLOG(LOG_DEBUG, "Notifying parent: healthy");
+            DBGLOG(LOG_INFO, "Notifying parent: healthy");
             sigqueue(ppid, SIG_LIVENESS, signal_value);
             break;
 

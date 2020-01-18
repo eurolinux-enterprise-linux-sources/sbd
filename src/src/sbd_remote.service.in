@@ -1,6 +1,5 @@
 [Unit]
 Description=Shared-storage based fencing daemon on pacemaker remote node
-Documentation=man:sbd(8)
 After=systemd-modules-load.service iscsi.service
 PartOf=pacemaker_remote.service
 RefuseManualStop=true
@@ -22,4 +21,4 @@ Restart=on-abort
 
 [Install]
 RequiredBy=pacemaker_remote.service
-RequiredBy=dlm.service
+

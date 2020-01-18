@@ -42,13 +42,6 @@
 //undef SUPPORT_PLUGIN
 //define SUPPORT_PLUGIN 1
 
-/* binary for pacemaker-remote has changed with pacemaker 2 */
-#ifdef CRM_SCORE_INFINITY
-#define PACEMAKER_REMOTE_BINARY "pacemaker-remoted"
-#else
-#define PACEMAKER_REMOTE_BINARY "pacemaker_remoted"
-#endif
-
 static bool remote_node = false;
 static pid_t remoted_pid = 0;
 static int reconnect_msec = 1000;
@@ -208,11 +201,10 @@ sbd_get_two_node(void)
     }
 
     if (cmap_get_uint8(cmap_handle, "quorum.two_node", &two_node_u8) == CS_OK) {
-        cl_log(two_node_u8? LOG_NOTICE : LOG_INFO,
-               "Corosync is%s in 2Node-mode", two_node_u8?"":" not");
+        cl_log(LOG_NOTICE, "Corosync is%s in 2Node-mode", two_node_u8?"":" not");
         two_node = two_node_u8;
     } else {
-        cl_log(LOG_INFO, "quorum.two_node not present in cmap\n");
+        cl_log(LOG_NOTICE, "quorum.two_node present in cmap\n");
     }
     return TRUE;
 
@@ -246,16 +238,12 @@ notify_timer_cb(gpointer data)
     }
 
     switch (get_cluster_type()) {
-#if HAVE_DECL_PCMK_CLUSTER_CLASSIC_AIS
         case pcmk_cluster_classic_ais:
             send_cluster_text(crm_class_quorum, NULL, TRUE, NULL, crm_msg_ais);
             break;
 
-#endif
         case pcmk_cluster_corosync:
-#if HAVE_DECL_PCMK_CLUSTER_CMAN
         case pcmk_cluster_cman:
-#endif
             /* TODO - Make a CPG call and only call notify_parent() when we get a reply */
             notify_parent();
             break;
@@ -272,7 +260,7 @@ sbd_membership_connect(void)
 {
     bool connected = false;
 
-    cl_log(LOG_INFO, "Attempting cluster connection");
+    cl_log(LOG_NOTICE, "Attempting cluster connection");
 
     cluster.destroy = sbd_membership_destroy;
 
@@ -316,7 +304,7 @@ sbd_membership_connect(void)
         }
     }
 
-    set_servant_health(pcmk_health_transient, LOG_INFO, "Connected, waiting for initial membership");
+    set_servant_health(pcmk_health_transient, LOG_NOTICE, "Connected, waiting for initial membership");
     notify_parent();
 
     notify_timer_cb(NULL);
@@ -339,7 +327,7 @@ sbd_membership_destroy(gpointer user_data)
  * \brief Get process ID and name associated with a /proc directory entry
  *
  * \param[in]  entry    Directory entry (must be result of readdir() on /proc)
- * \param[out] name     If not NULL, a char[16] to hold the process name
+ * \param[out] name     If not NULL, a char[64] to hold the process name
  * \param[out] pid      If not NULL, will be set to process ID of entry
  *
  * \return 0 on success, -1 if entry is not for a process or info not found
@@ -354,7 +342,7 @@ sbd_procfs_process_info(struct dirent *entry, char *name, int *pid)
     int fd, local_pid;
     FILE *file;
     struct stat statbuf;
-    char procpath[128] = { 0 };
+    char key[16] = { 0 }, procpath[128] = { 0 };
 
     /* We're only interested in entries whose name is a PID,
      * so skip anything non-numeric or that is too long.
@@ -397,7 +385,8 @@ sbd_procfs_process_info(struct dirent *entry, char *name, int *pid)
         if (!file) {
             return -1;
         }
-        if (fscanf(file, "Name:\t%15[a-zA-Z0-9 _-]", name) != 1) {
+        if ((fscanf(file, "%15s%63s", key, name) != 2)
+            || safe_str_neq(key, "Name:")) {
             fclose(file);
             return -1;
         }
@@ -442,7 +431,7 @@ sbd_remote_check(gpointer user_data)
 
     } else {
         int rc = 0;
-        char proc_path[PATH_MAX], exe_path[PATH_MAX];
+        char proc_path[PATH_MAX], exe_path[PATH_MAX], expected_path[PATH_MAX];
 
         /* check to make sure pid hasn't been reused by another process */
         snprintf(proc_path, sizeof(proc_path), "/proc/%lu/exe", (long unsigned int)remoted_pid);
@@ -454,7 +443,10 @@ sbd_remote_check(gpointer user_data)
         }
         exe_path[rc] = 0;
 
-        if (strcmp(exe_path, SBINDIR "/" PACEMAKER_REMOTE_BINARY) == 0) {
+        rc = snprintf(expected_path, sizeof(proc_path), "%s/pacemaker_remoted", SBINDIR);
+        expected_path[rc] = 0;
+
+        if (strcmp(exe_path, expected_path) == 0) {
             cl_log(LOG_DEBUG, "Process %s (%ld) is active",
                    exe_path, (long)remoted_pid);
             running = 1;
@@ -484,7 +476,7 @@ static long unsigned int
 find_pacemaker_remote(void)
 {
     DIR *dp;
-    char entry_name[16];
+    char entry_name[64];
     struct dirent *entry;
 
     dp = opendir("/proc");
@@ -503,7 +495,7 @@ find_pacemaker_remote(void)
 
         /* entry_name is truncated to 16 characters including the nul terminator */
         cl_log(LOG_DEBUG, "Found %s at %u", entry_name, pid);
-        if (strncmp(entry_name, PACEMAKER_REMOTE_BINARY, 15) == 0) {
+        if (strcmp(entry_name, "pacemaker_remot") == 0) {
             cl_log(LOG_NOTICE, "Found Pacemaker Remote at PID %u", pid);
             remoted_pid = pid;
             remote_node = true;
@@ -534,7 +526,7 @@ servant_cluster(const char *diskname, int mode, const void* argp)
     enum cluster_type_e cluster_stack = get_cluster_type();
 
     crm_system_name = strdup("sbd:cluster");
-    cl_log(LOG_NOTICE, "Monitoring %s cluster health", name_for_cluster_type(cluster_stack));
+    cl_log(LOG_INFO, "Monitoring %s cluster health", name_for_cluster_type(cluster_stack));
     set_proc_title("sbd: watcher: Cluster");
 
     sbd_membership_connect();

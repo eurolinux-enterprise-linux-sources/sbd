@@ -20,7 +20,7 @@ dnl     checks for library functions
 dnl     checks for system services
 
 AC_INIT([sbd], 
-	[1.4.0],
+	[1.3.1],
 	[lmb@suse.com])
 AC_CANONICAL_HOST
 AC_CONFIG_AUX_DIR(.)
@@ -71,13 +71,6 @@ dnl pacemaker >= 1.1.8
 AC_CHECK_HEADERS(pacemaker/crm/cluster.h)
 AC_CHECK_LIB(crmcommon, pcmk_strerror, , missing="yes")
 AC_CHECK_LIB(cib, cib_apply_patch_event, , missing="yes")
-
-dnl pacemaker-2.0 removed support for corosync 1 cluster layer
-AC_CHECK_DECLS([pcmk_cluster_classic_ais, pcmk_cluster_cman],,,
-	       [#include <pacemaker/crm/cluster.h>])
-
-dnl check for new pe-API
-AC_CHECK_FUNCS(pe_new_working_set)
 
 if test "$missing" = "yes"; then
    AC_MSG_ERROR([Missing required libraries or functions.])

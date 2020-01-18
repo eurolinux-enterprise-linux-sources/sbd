@@ -15,24 +15,22 @@
 
 # Please submit bugfixes or comments via http://bugs.opensuse.org/
 #
-%global commit 7f33d1a409d0a4e2cd69946688c48eaa8f3c5d26
+%global commit a74b4d25a3eb93fe1abbe6e3ebfd2b16cf48873f
 %global shortcommit %(c=%{commit}; echo ${c:0:7})
 %global github_owner Clusterlabs
-%global buildnum 4
+%global buildnum 7
 
 Name:           sbd
 Summary:        Storage-based death
 License:        GPLv2+
 Group:          System Environment/Daemons
-Version:        1.4.0
-Release:        %{buildnum}%{?dist}.3
+Version:        1.3.1
+Release:        %{buildnum}%{?dist}
 Url:            https://github.com/%{github_owner}/%{name}
 Source0:        https://github.com/%{github_owner}/%{name}/archive/%{commit}/%{name}-%{commit}.tar.gz
-Patch0:         0001-Fix-sbd-cluster-finalize-cmap-connection-if-disconne.patch
-Patch1:         0002-Fix-sbd-pacemaker-make-handling-of-cib-connection-lo.patch
-Patch2:         0003-Fix-sbd-pacemaker-bail-out-of-status-earlier.patch
-Patch12:        0013-Fix-sbd-pacemaker-assume-graceful-exit-if-leftovers-.patch
-Patch15:        0016-Fix-sbd-pacemaker-check-for-shutdown-attribute-on-ev.patch
+Patch0:         0001-make-pacemaker-dlm-wait-for-sbd-start.patch
+Patch1:         0002-mention-timeout-caveat-with-SBD_DELAY_START.patch
+Patch2:         0003-Doc-sbd.8.pod-add-query-test-watchdog.patch
 BuildRoot:      %{_tmppath}/%{name}-%{version}-build
 BuildRequires:  autoconf
 BuildRequires:  automake
@@ -48,7 +46,7 @@ BuildRequires:  pkgconfig
 BuildRequires:  python-devel
 
 %if 0%{?rhel} > 0
-ExclusiveArch: i686 x86_64 s390x ppc64le aarch64
+ExclusiveArch: i686 x86_64 s390x ppc64le
 %endif
 
 %if %{defined systemd_requires}
@@ -130,58 +128,6 @@ fi
 %doc COPYING
 
 %changelog
-* Thu Aug 16 2019 Klaus Wenninger <kwenning@redhat.com> - 1.4.0-4.3
-- check for shutdown attribute on every cib-diff
-
-  Resolves: rhbz#1732334
-
-* Thu Aug 1 2019 Klaus Wenninger <kwenning@redhat.com> - 1.4.0-4.2
-- rebuild using correct target
-
-  Resolves: rhbz#1732334
-
-* Tue Jul 30 2019 Klaus Wenninger <kwenning@redhat.com> - 1.4.0-4.1
-- assume graceful pacemaker exit if leftovers are unmanaged
-
-  Resolves: rhbz#1732334
-
-* Tue Mar 26 2019 Klaus Wenninger <kwenning@redhat.com> - 1.4.0-4
-- fix possible null-pointer-access just introduced
-
-  Resolves: rhbz#1691484
-
-* Tue Mar 26 2019 Klaus Wenninger <kwenning@redhat.com> - 1.4.0-3
-- finalize cmap connection if disconnected from cluster
-- make handling of cib-connection loss more robust
-
-  Resolves: rhbz#1691484
-
-* Thu Feb 7 2019 Klaus Wenninger <kwenning@redhat.com> - 1.4.0-2
-- rebuild against pacemaker 1.20 to make sbd actually use
-  the new libpengine API
-
-  Resolves: rhbz#1661233
-
-* Mon Jan 14 2019 Klaus Wenninger <kwenning@redhat.com> - 1.4.0-1
-- rebase to upstream v1.4.0
-
-  Resolves: rhbz#1660158
-
-* Wed Sep 19 2018 Klaus Wenninger <kwenning@redhat.com> - 1.3.1-8.2
-- avoid statting potential symlink-targets in /dev
-
-  Resolves: rhbz#1628988
-
-* Fri Sep 14 2018 Klaus Wenninger <kwenning@redhat.com> - 1.3.1-8.1
-- skip symlinks pointing to dev-nodes outside of /dev
-
-  Resolves: rhbz#1628988
-
-* Mon Apr 16 2018 <kwenning@redhat.com> - 1.3.1-8
-- Added aarch64 target
-
-  Resolves: rhbz#1568029
-
 * Mon Jan 15 2018 <kwenning@redhat.com> - 1.3.1-7
 - reenable sbd on upgrade so that additional
   links to make pacemaker properly depend on

@@ -1,0 +1,27 @@
+From f79d09ec8dd744f69d87008e868297b308043b56 Mon Sep 17 00:00:00 2001
+From: Klaus Wenninger <klaus.wenninger@aon.at>
+Date: Thu, 14 Dec 2017 18:21:07 +0100
+Subject: [PATCH] Doc: sbd.sysconfig: mention timeout caveat with
+ SBD_DELAY_START
+
+---
+ src/sbd.sysconfig | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/sbd.sysconfig b/src/sbd.sysconfig
+index cbc1501..75ff980 100644
+--- a/src/sbd.sysconfig
++++ b/src/sbd.sysconfig
+@@ -31,6 +31,9 @@ SBD_STARTMODE=always
+ # other nodes are still waiting in the fence acknowledgement phase.
+ # This is an occasional issue with virtual machines.
+ #
++# Consider that you might have to adapt the startup-timeout accordingly
++# if the default isn't sufficient. (TimeoutStartSec for systemd)
++#
+ # This option may be ignored at a later point, once pacemaker handles
+ # this case better.
+ #
+-- 
+1.8.3.1
+
